@@ -9,3 +9,6 @@ at speed and scale.
 - [Docs](https://docs.luthersystems.com/)
 - [Ellipse (ELPS): Embedded Lisp for Business Logic](https://github.com/luthersystems/elps)
 
+## Platform Release Notes
+- [Notes](https://docs.luthersystems.com/deployment/release-notes)
+- [Upcoming Major Releases](https://docs.luthersystems.com/deployment/major-platform-release-announcements)
