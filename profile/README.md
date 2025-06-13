@@ -5,7 +5,7 @@ at speed and scale.
 
 ## Getting Started
 
-- [Platform UI](https://app.platform-test.luthersystemsapp.com/loginEmail)
+- [Dev](https://dev.luthersystems.com)
 - [Docs](https://docs.luthersystems.com/)
 - [Ellipse (ELPS): Embedded Lisp for Business Logic](https://github.com/luthersystems/elps)
 
