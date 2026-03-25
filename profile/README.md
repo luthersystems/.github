@@ -57,7 +57,7 @@ Luther Enterprise automates end-to-end enterprise operations at speed and scale.
 
 ### Luther Enterprise Resources
 
-- [Dev Portal](https://dev.luthersystems.com)
+- [Luther Enterprise](https://enterprise.luthersystems.com)
 - [Documentation](https://docs.luthersystems.com/)
 - [Release Notes](https://docs.luthersystems.com/deployment/release-notes)
 
@@ -80,6 +80,6 @@ Luther Enterprise automates end-to-end enterprise operations at speed and scale.
 - [Discord](https://insideout.luthersystems.com/discord) -- chat with the team
 - [General Call](https://insideout.luthersystems.com/general-call) -- learn about Luther and how we can help
 - [Tech Call](https://insideout.luthersystems.com/tech-call) -- dive into your application with our engineers
-- [Sales Call](https://dev.luthersystems.com/sales-call) -- discuss pricing, deployment, and support
+- [Sales Call](https://insideout.luthersystems.com/sales-call) -- discuss pricing, deployment, and support
 - [Subreddit](https://www.reddit.com/r/luthersystems/)
 - Email: [contact@luthersystems.com](mailto:contact@luthersystems.com)
