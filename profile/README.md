@@ -18,9 +18,7 @@ Luther Systems builds tools that make production infrastructure accessible to ev
 
 ## InsideOut -- AI-Powered Cloud Infrastructure
 
-[InsideOut](https://insideout.luthersystems.com) is an agentic cloud infrastructure platform. Describe what you want to build in plain language, and **Riley** -- your AI infrastructure advisor -- designs, prices, deploys, and manages production-ready AWS & GCP infrastructure for you.
-
-No AWS console. No manual Terraform. No DevOps bottleneck.
+Describe your app -- we'll build, configure, deploy, and manage the infrastructure for you. [InsideOut](https://insideout.luthersystems.com) spins up production-ready AWS & GCP infrastructure from a single prompt. No complex setup, no constant maintenance, no wrestling with configs. One conversation, and you're in control in minutes.
 
 **Get started in your favorite editor:**
 
@@ -44,7 +42,7 @@ No AWS console. No manual Terraform. No DevOps bottleneck.
 
 ## Luther Enterprise -- Process Automation Platform
 
-Luther Enterprise automates end-to-end enterprise operations at speed and scale. Purpose-built for financial institutions and regulated industries, it provides deterministic process orchestration with full audit trails.
+Automating complex enterprise processes on our distributed execution platform. Purpose-built for financial institutions and regulated industries, Luther Enterprise provides deterministic process orchestration with full audit trails.
 
 | Repository | Description |
 |------------|-------------|
