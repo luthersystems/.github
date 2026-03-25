@@ -4,7 +4,7 @@
 
 # Luther Systems
 
-Luther Systems builds tools that make production infrastructure accessible to every developer. Founded by engineers who spent years building enterprise-grade systems for financial institutions, Luther takes the patterns that banks and Fortune 500 companies rely on and makes them available to startups and growing teams.
+Our mission is to accelerate the advent of the automated enterprise. Founded by a team who spent years automating complex processes for some of the world's largest financial institutions, Luther Systems builds platforms that bring enterprise-grade infrastructure and operations to teams of every size.
 
 <p align="center">
   <a href="https://luthersystems.com">Website</a> •
