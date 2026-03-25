@@ -63,18 +63,6 @@ Luther Enterprise automates end-to-end enterprise operations at speed and scale.
 
 ---
 
-## Open Source MCP Servers
-
-| Repository | Description |
-|------------|-------------|
-| [**mcp-confluent**](https://github.com/luthersystems/mcp-confluent) | MCP server for Confluent / Kafka |
-| [**mcp-server-google-drive**](https://github.com/luthersystems/mcp-server-google-drive) | MCP server for Google Drive |
-| [**mcp-server-hana**](https://github.com/luthersystems/mcp-server-hana) | MCP server for SAP HANA DB |
-| [**mcp-server-datadog**](https://github.com/luthersystems/mcp-server-datadog) | MCP server for Datadog |
-| [**mcp-server-mysql**](https://github.com/luthersystems/mcp-server-mysql) | Read-only MCP server for MySQL |
-
----
-
 ## Community & Contact
 
 - [Discord](https://insideout.luthersystems.com/discord) -- chat with the team
