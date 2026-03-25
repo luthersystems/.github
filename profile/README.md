@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/luthersystems/agent-skills/main/assets/banner.svg" alt="Luther Systems" width="100%">
-</p>
-
 # Luther Systems
 
 Our mission is to accelerate the advent of the automated enterprise. Founded by a team who spent years automating complex processes for some of the world's largest financial institutions, Luther Systems builds platforms that bring enterprise-grade infrastructure and operations to teams of every size.
