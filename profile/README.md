@@ -1,38 +1,85 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/luthersystems/agent-skills/main/assets/banner.svg" alt="Luther Systems" width="100%">
+</p>
+
 # Luther Systems
 
-Luther's Platform automates the operations of end to end enterprise processes,
-at speed and scale.
+Luther Systems builds tools that make production infrastructure accessible to every developer. Founded by engineers who spent years building enterprise-grade systems for financial institutions, Luther takes the patterns that banks and Fortune 500 companies rely on and makes them available to startups and growing teams.
 
-## Getting Started
-
-- [Dev](https://dev.luthersystems.com)
-- [Sandbox](https://github.com/luthersystems/sandbox)
-- [Docs](https://docs.luthersystems.com/)
-- [Docs Repo](https://github.com/luthersystems/docs)
-- [Ellipse (ELPS): Embedded Lisp for Business Logic](https://github.com/luthersystems/elps)
-
-## Platform Release Notes
-- [Notes](https://docs.luthersystems.com/deployment/release-notes)
-- [Upcoming Major Releases](https://docs.luthersystems.com/deployment/major-platform-release-announcements)
-
-
-## Contact 
-
-The fastest way to reach us is on our [Discord community](https://dev.luthersystems.com/discord), where our team is happy to answer questions and schedule one-on-one chats.
-
-You can always email us at <contact@luthersystems.com>.
+<p align="center">
+  <a href="https://luthersystems.com">Website</a> •
+  <a href="https://insideout.luthersystems.com">InsideOut</a> •
+  <a href="https://insideout.luthersystems.com/discord">Discord</a> •
+  <a href="https://insideout.luthersystems.com/general-call">Book a Call</a> •
+  <a href="mailto:contact@luthersystems.com">Contact</a>
+</p>
 
 ---
 
-## 🔗 Book a Call
+## InsideOut -- AI-Powered Cloud Infrastructure
 
-Choose the option that best fits your needs:
+[InsideOut](https://insideout.luthersystems.com) is an agentic cloud infrastructure platform. Describe what you want to build in plain language, and **Riley** -- your AI infrastructure advisor -- designs, prices, deploys, and manages production-ready AWS & GCP infrastructure for you.
 
-- [**General Call**](https://dev.luthersystems.com/general-call)
-  Learn more about the Luther Platform, the team, and how we can help.
+No AWS console. No manual Terraform. No DevOps bottleneck.
 
-- [**Technical Session**](https://dev.luthersystems.com/tech-call)
-  Dive into your application with our engineers and get hands-on support.
+**Get started in your favorite editor:**
 
-- [**Sales Call**](https://dev.luthersystems.com/sales-call)
-  Discuss pricing, deployment options, and dedicated support.
+| Platform | Install | Repository |
+|----------|---------|------------|
+| **Claude Code** | `/plugin marketplace add luthersystems/insideout-claude-code` | [insideout-claude-code](https://github.com/luthersystems/insideout-claude-code) |
+| **Kiro** | Add power from GitHub: `luthersystems/insideout-power` | [insideout-power](https://github.com/luthersystems/insideout-power) |
+| **Codex, Cursor, Windsurf, 30+ tools** | `npx skills add luthersystems/agent-skills --path insideout` | [agent-skills](https://github.com/luthersystems/agent-skills) |
+| **Web App** | No install -- [try it in your browser](https://insideout.luthersystemsapp.com/) | |
+
+### InsideOut Repos
+
+| Repository | Description |
+|------------|-------------|
+| [**agent-skills**](https://github.com/luthersystems/agent-skills) | Portable Agent Skills -- works with Claude Code, Codex, Cursor, Kiro, Windsurf, and 30+ tools |
+| [**insideout-claude-code**](https://github.com/luthersystems/insideout-claude-code) | Claude Code plugin with slash commands, agents, hooks, and auto-approve |
+| [**insideout-power**](https://github.com/luthersystems/insideout-power) | Kiro IDE power with steering files and design pattern guides |
+| [**insideout-terraform-presets**](https://github.com/luthersystems/insideout-terraform-presets) | 50+ pre-built, production-hardened Terraform modules for AWS & GCP |
+
+---
+
+## Luther Enterprise -- Process Automation Platform
+
+Luther Enterprise automates end-to-end enterprise operations at speed and scale. Purpose-built for financial institutions and regulated industries, it provides deterministic process orchestration with full audit trails.
+
+| Repository | Description |
+|------------|-------------|
+| [**elps**](https://github.com/luthersystems/elps) | ELPS -- an embedded Lisp interpreter for business logic |
+| [**mars**](https://github.com/luthersystems/mars) | Infrastructure management tool (Terraform, Ansible, Packer) |
+| [**tf-modules**](https://github.com/luthersystems/tf-modules) | Foundation Terraform modules for Luther infrastructure |
+| [**sandbox**](https://github.com/luthersystems/sandbox) | End-to-end "hello world" application on the Luther Platform |
+| [**lutherauth-sdk-go**](https://github.com/luthersystems/lutherauth-sdk-go) | Go SDK for LutherAuth |
+| [**shiroclient-sdk-go**](https://github.com/luthersystems/shiroclient-sdk-go) | Go SDK for the shiroclient gateway |
+
+### Luther Enterprise Resources
+
+- [Dev Portal](https://dev.luthersystems.com)
+- [Documentation](https://docs.luthersystems.com/)
+- [Release Notes](https://docs.luthersystems.com/deployment/release-notes)
+
+---
+
+## Open Source MCP Servers
+
+| Repository | Description |
+|------------|-------------|
+| [**mcp-confluent**](https://github.com/luthersystems/mcp-confluent) | MCP server for Confluent / Kafka |
+| [**mcp-server-google-drive**](https://github.com/luthersystems/mcp-server-google-drive) | MCP server for Google Drive |
+| [**mcp-server-hana**](https://github.com/luthersystems/mcp-server-hana) | MCP server for SAP HANA DB |
+| [**mcp-server-datadog**](https://github.com/luthersystems/mcp-server-datadog) | MCP server for Datadog |
+| [**mcp-server-mysql**](https://github.com/luthersystems/mcp-server-mysql) | Read-only MCP server for MySQL |
+
+---
+
+## Community & Contact
+
+- [Discord](https://insideout.luthersystems.com/discord) -- chat with the team
+- [General Call](https://insideout.luthersystems.com/general-call) -- learn about Luther and how we can help
+- [Tech Call](https://insideout.luthersystems.com/tech-call) -- dive into your application with our engineers
+- [Sales Call](https://dev.luthersystems.com/sales-call) -- discuss pricing, deployment, and support
+- [Subreddit](https://www.reddit.com/r/luthersystems/)
+- Email: [contact@luthersystems.com](mailto:contact@luthersystems.com)
