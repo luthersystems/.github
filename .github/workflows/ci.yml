@@ -33,6 +33,18 @@ jobs:
           echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  $t" | sha256sum -c -
           tar -xJ -C "$RUNNER_TEMP" -f "$t"
           echo "$RUNNER_TEMP/shellcheck-$v" >>"$GITHUB_PATH"
+      # Other repos call these with @v1. A file that loses its workflow_call
+      # trigger still passes actionlint, but every caller then fails at
+      # startup. That happened in v1.4.0: a caller replaced security.yml.
+      - name: Check the reusable workflows keep workflow_call
+        run: |
+          set -euo pipefail
+          for f in security quality benchmark release-tag; do
+            if ! grep -q '^  workflow_call:' ".github/workflows/$f.yml"; then
+              echo "::error file=.github/workflows/$f.yml::no workflow_call trigger: every caller of $f.yml@v1 would fail at startup"
+              exit 1
+            fi
+          done
       - name: Run actionlint
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
