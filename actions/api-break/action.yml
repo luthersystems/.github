@@ -1,0 +1,120 @@
+name: API break gate
+description: >-
+  Fail when a change removes or incompatibly changes the public Go API of a
+  module, compared with a base commit, unless a reviewed row of the repo's
+  overrides file waives each break.
+
+# Why this is an action: elps and substrate each had their own copy of this
+# gate, and other Go repos had none. A library change that removes an
+# exported function then broke its callers only when they upgraded. One copy,
+# with pinned tools, released with this repo's tags, gives every Go repo the
+# same rule and the same override format.
+#
+# How it judges (api-break.sh has the details):
+#   - apidiff, in package mode, compares each public package of each module
+#     in the base commit with the same package in the head. A public package
+#     is not main, not under internal/, and does not depend on an
+#     exclude-deps path. Package mode over an explicit list, not module mode,
+#     because module mode loads every package, so a repo with a private
+#     module it cannot fetch in CI (substrate's license module) could not run
+#     the gate at all.
+#   - elps's cmd/apibreak reads the report, applies the overrides file and
+#     decides. It is the same judge elps and substrate use, so the override
+#     format and rules stay in one place.
+#   - surface-script lets a repo add surfaces other than Go (elps's Lisp
+#     surface and golden files, substrate's Lisp surface).
+#
+# Needs: Go on PATH, set up from the repo's go.mod (apidiff type-checks the
+# code), access to private modules when the repo has any, and a checkout
+# that holds base-sha (fetch-depth: 0, or 2 on a PR merge commit).
+
+inputs:
+  directories:
+    description: >-
+      Module directories, space separated, relative to the repo root. Empty
+      means every go.mod outside vendor/, testdata/ and node_modules/.
+    required: false
+    default: ""
+  base-sha:
+    description: >-
+      The commit to compare against. On a pull request, the first parent of
+      the merge commit: the base branch as the merge would change it.
+    required: true
+  overrides:
+    description: >-
+      Overrides file, relative to the repo root. Each row is
+      `surface | symbol | expires (YYYY-MM-DD) | issue | reason`. A missing
+      file means no break is waived.
+    required: false
+    default: .github/quality/api-breaks.txt
+  exclude-deps:
+    description: >-
+      Import paths, space separated. A package that is, or depends on, one of
+      them is left out of the comparison, for example a private module that
+      CI cannot fetch.
+    required: false
+    default: ""
+  surface-script:
+    description: >-
+      Optional script, relative to the repo root, for surfaces other than Go.
+      It runs as `<script> <base-tree> <head-tree> <out-dir>` from the repo
+      root, and may write <out-dir>/lisp-base.json and lisp-head.json, and
+      the directories <out-dir>/golden-base and golden-head.
+    required: false
+    default: ""
+  apibreak-version:
+    description: >-
+      Version of github.com/luthersystems/elps/cmd/apibreak (an elps tag).
+      Pinned so an elps release cannot change a result with no change in the
+      repo.
+    required: false
+    default: v1.85.0
+  apidiff-version:
+    description: >-
+      Version of golang.org/x/exp/cmd/apidiff. golang.org/x/exp has no tags,
+      so this is a pseudo-version; its date shows the release.
+    required: false
+    default: v0.0.0-20260908205506-85c1c2202aba
+
+runs:
+  using: composite
+  steps:
+    # Restore the binaries this repo built for these versions, if any (see
+    # lib/go-install.sh for why a cache and why go install).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/apidiff-${{ inputs.apidiff-version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-apidiff-${{ inputs.apidiff-version }}
+    - name: Install apidiff
+      shell: bash
+      env:
+        VERSION: ${{ inputs.apidiff-version }}
+        DIR: ${{ runner.temp }}/luther-tools/apidiff-${{ inputs.apidiff-version }}
+        # Install from the module proxy, not from the caller's go.mod or
+        # go.work, so the pinned version is the one built.
+        GOFLAGS: ""
+        GOWORK: "off"
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "golang.org/x/exp/cmd/apidiff@${VERSION}" apidiff
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/apibreak-${{ inputs.apibreak-version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-apibreak-${{ inputs.apibreak-version }}
+    # go install and not go run: go run turns every non-zero exit into 1, and
+    # apibreak's 2 (could not judge) must not read as 1 (unwaived break).
+    - name: Install apibreak
+      shell: bash
+      env:
+        VERSION: ${{ inputs.apibreak-version }}
+        DIR: ${{ runner.temp }}/luther-tools/apibreak-${{ inputs.apibreak-version }}
+        GOFLAGS: ""
+        GOWORK: "off"
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/luthersystems/elps/cmd/apibreak@${VERSION}" apibreak
+    - name: Run the API break gate
+      shell: bash
+      env:
+        DIRS: ${{ inputs.directories }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        OVERRIDES: ${{ inputs.overrides }}
+        EXCLUDE_DEPS: ${{ inputs.exclude-deps }}
+        SURFACE_SCRIPT: ${{ inputs.surface-script }}
+      run: bash "$GITHUB_ACTION_PATH/api-break.sh"
