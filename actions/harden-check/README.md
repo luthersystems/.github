@@ -28,7 +28,7 @@ kit release and no PR per repo.
 - uses: luthersystems/.github/actions/harden-check@v1
   with:
     # Optional when the Dockerfiles pin the kit stage.
-    kit: luthersystems/build-harden:v0.1.45@sha256:ed783a0cd4faf6cd791b844970f00309cec76c4ab90b1e111d641ba44d67ba46
+    kit: luthersystems/build-harden:v0.1.46@sha256:f3c02942cf086e8b976f0bf3e7a089bd29efdb34e788f0eaad64f38db76d4c05
     dockerfiles: Dockerfile
     images: |
       my-image:${{ github.sha }}
@@ -67,6 +67,7 @@ that needs callers to change goes to `v2`. `release.yml` cuts the releases.
 `ci.yml` runs the action on both architectures: a hardened base image passes,
 a plain Alpine image fails, and fixtures in `tests/harden-check` cover an NSS
 database that holds a listed certificate under another nickname, and a
-chromedp `headless-shell` binary (both from luthersystems/buildenv#165).
+chromedp `headless-shell` binary (both from luthersystems/buildenv#165), and a Debian JDK whose
+blocked.certs is a link (luthersystems/buildenv#166).
 The `same-kit` fixtures cover a file that pins the kit checked (passes),
 another kit and no kit (both fail).
