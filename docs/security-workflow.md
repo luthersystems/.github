@@ -161,6 +161,8 @@ as the fingerprint the log prints (`commit:file:rule:line` for a commit,
 
 `tests/security/security-test.sh` runs each check on fixtures that must fail
 and on fixtures that must pass, and asserts the reason in the log.
-`tests/security/drift-test.cjs` tests the drift issue logic. The `CI`
+`tests/security/drift-test.cjs` tests the drift issue logic, and
+`tests/security/osv_gate_test.py` tests how the osv gate orders versions and
+finds the fix for the installed release line. The `CI`
 workflow runs both, and runs each action as a caller does. The fixtures are
 described in `tests/security/testdata/README.md`.

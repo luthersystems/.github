@@ -122,15 +122,20 @@ key="AKIA$(head -c 64 /dev/urandom | base32 | tr -dc 'A-Z2-7' | head -c 16)"
 printf 'aws_access_key_id = %s\n' "$key" >config.ini
 git add config.ini && git commit -qm leak
 head="$(git rev-parse HEAD)"
+echo "more" >>README
+git add README && git commit -qm clean-again
+clean="$(git rev-parse HEAD)"
 
 expect fail "gitleaks: PR range with a key fails" "found a secret" -- \
   env EVENT=pull_request BASE="$base" HEAD="$head" bash "$gl"
+# A range with one real, clean commit after the leak: only the commits the PR
+# adds are scanned, so an older leak does not fail it.
 expect pass "gitleaks: PR range without it passes" "" -- \
-  env EVENT=pull_request BASE="$base" HEAD="$base" bash -c "git checkout -q '$base' && bash '$gl'; s=\$?; git checkout -q -; exit \$s"
+  env EVENT=pull_request BASE="$head" HEAD="$clean" bash "$gl"
 expect fail "gitleaks: push range fails" "found a secret" -- \
   env EVENT=push BEFORE="$base" AFTER="$head" bash "$gl"
 expect fail "gitleaks: scheduled scan of HEAD fails" "found a secret" -- env EVENT=schedule bash "$gl"
-if grep -q "$key" "$RUNNER_TEMP/gitleaks.txt" 2>/dev/null; then
+if grep -q "$key" "$work/log"; then
   echo "FAIL gitleaks: the log shows the secret (it must be redacted)"
   fails=$((fails + 1))
 else

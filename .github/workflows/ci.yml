@@ -138,3 +138,5 @@ jobs:
         run: bash tests/security/security-test.sh
       - name: Drift issue cases
         run: node tests/security/drift-test.cjs
+      - name: osv gate version and fix cases
+        run: python3 tests/security/osv_gate_test.py

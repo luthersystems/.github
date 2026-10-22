@@ -17,12 +17,10 @@
 #   DIRS        module directories, space separated; empty = every go.mod
 #   EXEMPTIONS  exemptions file, relative to the repo root
 #   BINARY      true: also scan built main packages
-#   REPORT      file that collects the log for the drift issue
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(pwd)"
-REPORT="${REPORT:-${RUNNER_TEMP:-/tmp}/govulncheck.txt}"
 EXEMPTIONS="${EXEMPTIONS:-}"
 if [ -n "$EXEMPTIONS" ]; then
   EXEMPTIONS="$root/$EXEMPTIONS"
@@ -43,14 +41,14 @@ failed=0
 for d in $dirs; do
   echo "::group::govulncheck (source) $d"
   status=0
-  python3 "$here/govulncheck-gate.py" --exemptions "$EXEMPTIONS" "$d" ./... 2>&1 | tee -a "$REPORT" || status=$?
+  python3 "$here/govulncheck-gate.py" --exemptions "$EXEMPTIONS" "$d" ./... 2>&1 || status=$?
   echo "::endgroup::"
   [ "$status" -eq 0 ] || failed=1
 
   [ "${BINARY:-false}" = "true" ] || continue
 
   if ! mains="$(cd "$d" && go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./...)"; then
-    echo "::error title=govulncheck binary mode: build failure, not a finding::go list ./... failed in $d, so nothing there was built or scanned" | tee -a "$REPORT"
+    echo "::error title=govulncheck binary mode: build failure, not a finding::go list ./... failed in $d, so nothing there was built or scanned"
     failed=1
     continue
   fi
@@ -60,12 +58,12 @@ for d in $dirs; do
     echo "::group::govulncheck (binary) $pkg"
     if ! (cd "$d" && go build -o "$out" "$pkg"); then
       echo "::endgroup::"
-      echo "::error title=govulncheck binary mode: build failure, not a finding::go build $pkg failed, so it was not scanned" | tee -a "$REPORT"
+      echo "::error title=govulncheck binary mode: build failure, not a finding::go build $pkg failed, so it was not scanned"
       failed=1
       continue
     fi
     status=0
-    python3 "$here/govulncheck-gate.py" --exemptions "$EXEMPTIONS" "$d" -mode=binary "$out" 2>&1 | tee -a "$REPORT" || status=$?
+    python3 "$here/govulncheck-gate.py" --exemptions "$EXEMPTIONS" "$d" -mode=binary "$out" 2>&1 || status=$?
     echo "::endgroup::"
     [ "$status" -eq 0 ] || failed=1
   done

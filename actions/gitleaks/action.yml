@@ -9,20 +9,22 @@ inputs:
     description: gitleaks version. Pinned so a release cannot change a result with no change in the repo.
     required: false
     default: v8.30.1
-  report:
-    description: File the log is appended to, for the drift issue.
-    required: false
-    default: ""
 
 runs:
   using: composite
   steps:
+    # Restores the binary this repo built for this version, if any (see
+    # lib/go-install.sh for why a cache and why go install).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/gitleaks-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-gitleaks-${{ inputs.version }}
     - name: Install gitleaks
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-      # go install checks the module against the Go checksum database.
-      run: GOTOOLCHAIN=auto go install "github.com/zricethezav/gitleaks/v8@${VERSION}"
+        DIR: ${{ runner.temp }}/luther-tools/gitleaks-${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/zricethezav/gitleaks/v8@${VERSION}" gitleaks
     - name: Run gitleaks
       shell: bash
       env:
@@ -31,5 +33,4 @@ runs:
         HEAD: ${{ github.event.pull_request.head.sha }}
         BEFORE: ${{ github.event.before }}
         AFTER: ${{ github.event.after }}
-        REPORT: ${{ inputs.report }}
       run: bash "$GITHUB_ACTION_PATH/gitleaks.sh"

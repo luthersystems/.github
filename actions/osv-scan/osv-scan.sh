@@ -3,13 +3,12 @@
 # the report with osv-gate.py. Why osv-scanner, and the fail rule: see
 # action.yml and osv-gate.py.
 #
-# Env: SKIP_GO (true: leave Go to govulncheck), EXCLUDE (one per line),
-# REPORT (log for the drift issue). osv-scanner must be on PATH.
+# Env: SKIP_GO (true: leave Go to govulncheck), EXCLUDE (one per line).
+# osv-scanner must be on PATH.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 tmp="${RUNNER_TEMP:-$(mktemp -d)}"
-report="${REPORT:-$tmp/osv.txt}"
 out="$tmp/osv.json"
 args=(scan source -r --format json --allow-no-lockfiles --output-file "$out")
 gate=()
@@ -37,4 +36,4 @@ if [ "$status" -gt 1 ]; then
   echo "::error title=osv-scanner failed::osv-scanner exited $status, so nothing was scanned"
   exit 1
 fi
-python3 "$here/osv-gate.py" "${gate[@]}" "$out" 2>&1 | tee -a "$report"
+python3 "$here/osv-gate.py" "${gate[@]}" "$out"

@@ -38,26 +38,26 @@ inputs:
     description: govulncheck version (golang.org/x/vuln). Pinned so a release cannot change a result with no change in the repo.
     required: false
     default: v1.8.0
-  report:
-    description: File the scan log is appended to, for the drift issue.
-    required: false
-    default: ""
 
 runs:
   using: composite
   steps:
+    # Restores the binary this repo built for this version, if any (see
+    # lib/go-install.sh for why a cache and why go install).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/govulncheck-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-govulncheck-${{ inputs.version }}
     - name: Install govulncheck
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-      # go install checks the module against the Go checksum database, so the
-      # binary is the reviewed release, as a pinned checksum would prove.
-      run: GOTOOLCHAIN=auto go install "golang.org/x/vuln/cmd/govulncheck@${VERSION}"
+        DIR: ${{ runner.temp }}/luther-tools/govulncheck-${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "golang.org/x/vuln/cmd/govulncheck@${VERSION}" govulncheck
     - name: Run govulncheck
       shell: bash
       env:
         DIRS: ${{ inputs.directories }}
         EXEMPTIONS: ${{ inputs.exemptions }}
         BINARY: ${{ inputs.binary }}
-        REPORT: ${{ inputs.report }}
       run: bash "$GITHUB_ACTION_PATH/govulncheck.sh"

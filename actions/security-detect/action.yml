@@ -15,7 +15,7 @@ outputs:
     description: Module directories, space separated (empty when none).
     value: ${{ steps.find.outputs.go-directories }}
   go-version-file:
-    description: The go.mod whose Go version the Go jobs set up (the first module).
+    description: The go.mod that asks for the newest Go (toolchain line, else go line), so every module builds.
     value: ${{ steps.find.outputs.go-version-file }}
 
 runs:
@@ -30,6 +30,16 @@ runs:
         dirs="${GIVEN:-$("$GITHUB_ACTION_PATH/find-go-modules.sh" | tr '\n' ' ')}"
         dirs="$(echo "$dirs" | xargs)"
         echo "go-directories=$dirs" >>"$GITHUB_OUTPUT"
-        first="${dirs%% *}"
-        echo "go-version-file=${first:+$first/go.mod}" >>"$GITHUB_OUTPUT"
+        # One Go for every module: the newest any go.mod asks for. A module
+        # that asks for an older Go builds with a newer one; the reverse
+        # fails (go refuses a go.mod newer than itself, or must download a
+        # toolchain on every run).
+        best="" bestv=""
+        for d in $dirs; do
+          v="$(awk '$1=="toolchain"{sub(/^go/,"",$2); t=$2} $1=="go"{g=$2} END{print (t?t:g)}' "$d/go.mod")"
+          if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$bestv" "$v" | sort -V | tail -1)" = "$v" ] && [ "$v" != "$bestv" ]; then
+            best="$d/go.mod" bestv="$v"
+          fi
+        done
+        echo "go-version-file=$best" >>"$GITHUB_OUTPUT"
         echo "Go modules: ${dirs:-none}"

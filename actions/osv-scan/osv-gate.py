@@ -26,6 +26,7 @@ ignoreUntil date or no reason, so no exemption is open-ended or unexplained.
 """
 import datetime
 import json
+import re
 import sys
 
 try:
@@ -82,19 +83,77 @@ def score(group, vulns):
     return best
 
 
-def fixed_in(pkg, group, vulns):
-    """The versions that fix this group for this package (empty = no fix)."""
-    fixes = set()
+def version_key(v):
+    """A sort key that orders most version schemes (semver, PEP 440, npm).
+
+    Numbers compare as numbers and words as words, and a pre-release word
+    (1.2.0-rc1) sorts before the release (1.2.0). It is not exact for every
+    ecosystem, so the gate uses it only to find which range holds the
+    installed version; when it cannot tell, the finding blocks (see fix_for).
+    """
+    v = str(v).lstrip("vV").split("+", 1)[0]
+    key = []
+    for part in re.findall(r"\d+|[A-Za-z]+", v):
+        key.append((1, int(part), "") if part.isdigit() else (0, 0, part.lower()))
+    # 1.2 and 1.2.0 are the same version, and so are 1.2-rc1 and 1.2.0-rc1:
+    # drop the trailing zeros of the release numbers (before the first word).
+    head = next((i for i, t in enumerate(key) if t[0] == 0), len(key))
+    while head and key[head - 1] == (1, 0, ""):
+        del key[head - 1]
+        head -= 1
+    # An end mark that sorts above any word and below any number, so a
+    # pre-release sorts before its release (1.2.0-rc1 < 1.2.0) and a release
+    # before a longer one (2.0 < 2.0.1).
+    key.append((0, 1, ""))
+    return key
+
+
+def fix_for(pkg, group, vulns):
+    """The version that fixes this group for the installed version.
+
+    Returns (fixable, versions). An OSV range is a list of events: each
+    "introduced" opens an affected span, and the next "fixed" closes it. The
+    installed version is fixable when the span that holds it is closed by a
+    "fixed" (the versions listed). It is not fixable when that span is open
+    (no fix yet on that release line), even if another line has a fix: a
+    fix on 1.x is no fix for 2.x. When no SEMVER or ECOSYSTEM range names
+    the installed version, the gate cannot tell, and treats it as fixable
+    when any range has a fix: a blocked merge can be exempted, a missed one
+    cannot be seen.
+    """
+    installed = pkg.get("version", "")
+    ik = version_key(installed) if installed else None
+    any_fix, matched, fixes = set(), False, set()
     for vid in group.get("ids", []):
         for aff in vulns.get(vid, {}).get("affected", []):
             p = aff.get("package", {})
-            if p.get("name") != pkg["name"] or p.get("ecosystem", "").split(":")[0] != pkg["ecosystem"].split(":")[0]:
+            if p.get("name") != pkg.get("name") or p.get("ecosystem", "").split(":")[0] != pkg.get("ecosystem", "").split(":")[0]:
                 continue
+            if installed and installed in (aff.get("versions") or []):
+                matched = True
             for rng in aff.get("ranges", []):
+                if rng.get("type") not in ("SEMVER", "ECOSYSTEM"):
+                    continue
+                start = None
                 for ev in rng.get("events", []):
-                    if "fixed" in ev:
-                        fixes.add(ev["fixed"])
-    return sorted(fixes)
+                    if "introduced" in ev:
+                        start = ev["introduced"]
+                    elif ("fixed" in ev or "last_affected" in ev) and start is not None:
+                        end = ev.get("fixed")
+                        if end:
+                            any_fix.add(end)
+                        if ik is not None and (start == "0" or version_key(start) <= ik):
+                            if end and ik < version_key(end):
+                                matched = True
+                                fixes.add(end)
+                            elif not end and ik <= version_key(ev["last_affected"]):
+                                matched = True
+                        start = None
+                if start is not None and ik is not None and (start == "0" or version_key(start) <= ik):
+                    matched = True  # open span: affected, no fix on this line
+    if matched:
+        return bool(fixes), sorted(fixes, key=version_key)
+    return bool(any_fix), sorted(any_fix, key=version_key)
 
 
 def main(argv):
@@ -136,11 +195,11 @@ def main(argv):
             vulns = {v["id"]: v for v in entry.get("vulnerabilities") or []}
             for group in entry.get("groups") or []:
                 s = score(group, vulns)
-                fixes = fixed_in(pkg, group, vulns)
+                fixable, fixes = fix_for(pkg, group, vulns)
                 name = ", ".join(group.get("aliases") or group.get("ids") or ["?"])
                 where = f"{pkg.get('name')}@{pkg.get('version')} ({pkg.get('ecosystem')}, {source})"
-                fix = f"fixed in {', '.join(fixes)}" if fixes else "no fix yet"
-                if s >= HIGH and fixes:
+                fix = f"fixed in {', '.join(fixes)}" if fixable else "no fix yet"
+                if s >= HIGH and fixable:
                     blocking += 1
                     print(f"::error title=osv: fixable severity {s}::{where}: {name}, {fix}")
                 else:

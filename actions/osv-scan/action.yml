@@ -29,24 +29,25 @@ inputs:
     description: osv-scanner version. Pinned so a release cannot change a result with no change in the repo.
     required: false
     default: v2.6.0
-  report:
-    description: File the log is appended to, for the drift issue.
-    required: false
-    default: ""
 
 runs:
   using: composite
   steps:
+    # Restores the binary this repo built for this version, if any (see
+    # lib/go-install.sh for why a cache and why go install).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/osv-scanner-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-osv-scanner-${{ inputs.version }}
     - name: Install osv-scanner
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-      # go install checks the module against the Go checksum database.
-      run: GOTOOLCHAIN=auto go install "github.com/google/osv-scanner/v2/cmd/osv-scanner@${VERSION}"
+        DIR: ${{ runner.temp }}/luther-tools/osv-scanner-${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/google/osv-scanner/v2/cmd/osv-scanner@${VERSION}" osv-scanner
     - name: Run osv-scanner
       shell: bash
       env:
         SKIP_GO: ${{ inputs.skip-go }}
         EXCLUDE: ${{ inputs.exclude }}
-        REPORT: ${{ inputs.report }}
       run: bash "$GITHUB_ACTION_PATH/osv-scan.sh"

@@ -19,12 +19,15 @@
 # the repo's .gitleaks.toml allowlist; gitleaks reads both from the repo root.
 # Secrets are redacted in the log.
 #
-# Env: EVENT, BASE, HEAD, BEFORE, AFTER (from the workflow), REPORT.
+# Env: EVENT, BASE, HEAD, BEFORE, AFTER (from the workflow).
 set -uo pipefail
 
-REPORT="${REPORT:-${RUNNER_TEMP:-/tmp}/gitleaks.txt}"
 zero=0000000000000000000000000000000000000000
-common=(--no-banner --redact -v --exit-code 1)
+# gitleaks exits 1 on its own errors too (a bad range, a bad config), so a
+# found secret gets its own code. Otherwise a scan that never ran would read
+# as "found a secret" and send someone to rotate a key that never leaked.
+leak=99
+common=(--no-banner --redact -v --exit-code "$leak")
 
 range=""
 case "${EVENT:-}" in
@@ -35,15 +38,15 @@ esac
 status=0
 if [ -n "$range" ]; then
   echo "gitleaks: scanning commits $range"
-  gitleaks git "${common[@]}" --log-opts="$range" . 2>&1 | tee -a "$REPORT" || status=$?
+  gitleaks git "${common[@]}" --log-opts="$range" . 2>&1 || status=$?
 else
   echo "gitleaks: scanning the files at HEAD"
-  gitleaks dir "${common[@]}" . 2>&1 | tee -a "$REPORT" || status=$?
+  gitleaks dir "${common[@]}" . 2>&1 || status=$?
 fi
 
 case "$status" in
   0) exit 0 ;;
-  1) echo "::error title=gitleaks found a secret::Rotate it first, then remove it. A false positive goes in .gitleaksignore (the fingerprint is in the log)."
+  "$leak") echo "::error title=gitleaks found a secret::Rotate it first, then remove it. A false positive goes in .gitleaksignore (the fingerprint is in the log)."
      exit 1 ;;
   *) echo "::error title=gitleaks failed::gitleaks exited $status, so nothing was scanned"
      exit 1 ;;

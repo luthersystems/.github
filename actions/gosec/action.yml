@@ -21,23 +21,24 @@ inputs:
     description: golangci-lint version. Pinned so a release cannot change a result with no change in the repo.
     required: false
     default: v2.13.2
-  report:
-    description: File the log is appended to, for the drift issue.
-    required: false
-    default: ""
 
 runs:
   using: composite
   steps:
+    # Restores the binary this repo built for this version, if any (see
+    # lib/go-install.sh for why a cache and why go install).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/golangci-lint-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-golangci-lint-${{ inputs.version }}
     - name: Install golangci-lint
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-      # go install checks the module against the Go checksum database.
-      run: GOTOOLCHAIN=auto go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${VERSION}"
+        DIR: ${{ runner.temp }}/luther-tools/golangci-lint-${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${VERSION}" golangci-lint
     - name: Run gosec
       shell: bash
       env:
         DIRS: ${{ inputs.directories }}
-        REPORT: ${{ inputs.report }}
       run: bash "$GITHUB_ACTION_PATH/gosec.sh"
