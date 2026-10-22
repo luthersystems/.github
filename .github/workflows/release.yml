@@ -37,13 +37,13 @@ permissions: {}
 jobs:
   release:
     permissions:
-      actions: read # read actionlint's push run
+      actions: read # read the CI push run
       contents: write # create the release
     uses: ./.github/workflows/release-tag.yml
     with:
       version: ${{ inputs.version }}
       dry_run: ${{ inputs.dry_run }}
-      ci_workflow: actionlint.yml
+      ci_workflow: ci.yml
 
   move-major:
     name: Move the major tag

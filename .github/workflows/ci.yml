@@ -1,0 +1,88 @@
+name: CI
+
+# Why: this repo holds shared workflows and actions that other luthersystems
+# repos call. An error here breaks every caller at once, so each pull request
+# lints the workflows and tests the harden-check action before they can merge.
+# release.yml releases only a main commit whose push run of this workflow
+# passed, so a tag never points at a red commit.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # actionlint and shellcheck are pinned to exact versions so a new
+      # release cannot turn a green PR red without a change in this repo.
+      # actionlint runs shellcheck on each run: block when it is on PATH.
+      - name: Install shellcheck
+        run: |
+          set -euo pipefail
+          v=v0.10.0
+          t=$RUNNER_TEMP/shellcheck.tar.xz
+          curl -fsSL -o "$t" "https://github.com/koalaman/shellcheck/releases/download/$v/shellcheck-$v.linux.x86_64.tar.xz"
+          # The checksum of the reviewed release: a changed tarball fails.
+          echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  $t" | sha256sum -c -
+          tar -xJ -C "$RUNNER_TEMP" -f "$t"
+          echo "$RUNNER_TEMP/shellcheck-$v" >>"$GITHUB_PATH"
+      - name: Run actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint" -color
+      - name: Run shellcheck on the action scripts
+        run: shellcheck -x actions/*/*.sh actions/*/check/*.sh tests/*/*.sh
+
+  # A passing case runs the action as a caller does (uses: ./actions/...).
+  # A failing case runs the action's script with the same inputs and asserts
+  # the exit code and the reason, so neither a check that passes everything
+  # nor one that fails for another reason (a pull error, a crash) passes here.
+  harden-check:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both architectures the repos build on: the kit and the check must
+        # work on the arm runners too.
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    env:
+      KIT: luthersystems/build-harden:v0.1.45@sha256:ed783a0cd4faf6cd791b844970f00309cec76c4ab90b1e111d641ba44d67ba46
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: "Pass: a hardened base image, both platforms"
+        uses: ./actions/harden-check
+        with:
+          kit: ${{ env.KIT }}
+          images: luthersystems/service-base-alpine:v0.1.45@sha256:45e7d2a2f7cf115872862ece632c2057993ebff4f72c696e0bf18d77db9dece3
+          platforms: linux/amd64 linux/arm64
+
+      - name: Build the fixture images
+        run: |
+          set -euo pipefail
+          docker build -q -t harden-check-test/nss-other-nickname tests/harden-check/nss-other-nickname
+          docker build -q -t harden-check-test/chrome-no-nssdb tests/harden-check/chrome-no-nssdb
+          docker build -q -t harden-check-test/debian-jdk tests/harden-check/debian-jdk
+
+      # buildenv#165: a listed certificate under another nickname, and a
+      # headless-shell binary with an NSS database. The kit is read from the
+      # Dockerfile, and the image line names its platform.
+      - name: "Pass: NSS match by fingerprint, headless-shell with an NSS database"
+        uses: ./actions/harden-check
+        with:
+          dockerfiles: tests/harden-check/nss-other-nickname/Dockerfile
+          images: harden-check-test/nss-other-nickname ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
+
+      - name: Dockerfile check cases
+        run: bash tests/harden-check/dockerfile-test.sh
+
+      - name: "Fail: the failing cases fail, for the right reason"
+        run: bash tests/harden-check/expect-fail.sh
