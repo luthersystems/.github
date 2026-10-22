@@ -121,6 +121,14 @@ jobs:
             echo "error: version '$version' is not vMAJOR.MINOR.PATCH without leading zeros" >&2
             exit 1
           }
+          # A second dispatch queued behind the first (concurrency above)
+          # runs on the same live main and would auto-bump again, cutting a
+          # second release of one commit. Refuse a commit already released.
+          already=$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | tr '\n' ' ' || true)
+          if [ -n "$already" ]; then
+            echo "error: commit $GITHUB_SHA is already released as $already" >&2
+            exit 1
+          fi
           if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
             echo "error: tag $version already exists" >&2
             exit 1
