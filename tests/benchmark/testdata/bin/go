@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Fake `go` for tests/benchmark: records each call and prints go test output.
+#   FAKE_GO_LOG     file each call appends one line to: arm, GOMAXPROCS, the
+#                   variables named in FAKE_GO_RECORD, then the arguments
+#   FAKE_GO_RECORD  space-separated variable names to record
+#   FAKE_GO_MODE    ok (default) | setup-fail-nobench | build-fail-bench |
+#                   test-fail
+#   FAKE_GO_ARM     the mode applies only in this arm (base or pr); empty: both
+set -uo pipefail
+arm="$(basename "$PWD")"
+rec=""
+for v in ${FAKE_GO_RECORD:-}; do rec="${rec} ${v}=${!v-<unset>}"; done
+echo "arm=${arm} GOMAXPROCS=${GOMAXPROCS-<unset>}${rec} args=$*" >>"${FAKE_GO_LOG:-/dev/null}"
+mode="${FAKE_GO_MODE:-ok}"
+[ -z "${FAKE_GO_ARM:-}" ] || [ "$FAKE_GO_ARM" = "$arm" ] || mode=ok
+sfx=""
+[ "${GOMAXPROCS:-1}" = 1 ] || sfx="-${GOMAXPROCS}"
+printf 'goos: linux\ngoarch: amd64\npkg: example.com/m/a\ncpu: Fake CPU\n'
+if [ "$mode" != build-fail-bench ]; then
+  printf 'BenchmarkA%s\t     100\t        10.0 ns/op\t       0 B/op\t       0 allocs/op\n' "$sfx"
+fi
+printf 'BenchmarkB%s\t     100\t        20.0 ns/op\t       8 B/op\t       1 allocs/op\n' "$sfx"
+echo "PASS"
+case "$mode" in
+  ok) echo "ok  	example.com/m/a	0.1s"; exit 0 ;;
+  setup-fail-nobench) echo "ok  	example.com/m/a	0.1s"
+    echo "FAIL	example.com/m/private [setup failed]"; exit 1 ;;
+  build-fail-bench) echo "FAIL	example.com/m/a [build failed]"; exit 1 ;;
+  test-fail) echo "--- FAIL: BenchmarkA"; echo "FAIL	example.com/m/a	0.1s"; exit 1 ;;
+esac

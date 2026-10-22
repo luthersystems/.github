@@ -1,0 +1,168 @@
+name: benchmark gate
+description: >-
+  Compare the two benchmark arms that benchmark-run measured with benchstat,
+  judge the comparison with benchgate, post one PR comment, and fail on a
+  regression, an uninterpretable comparison or an unfit runner.
+
+# Why: the shared copy of the gate luthersystems/elps and
+# luthersystems/substrate each ran. The judge is cmd/benchgate in
+# luthersystems/elps (elps#538), one Go program in place of two awk copies
+# that had diverged. Its exit code is the verdict: 0 clean, 1 regression,
+# 2 cannot interpret (it never reports success on input it cannot read),
+# 3 runner unfit (re-measure). This action only reports it.
+#
+# Needs: the files benchmark-run writes in $GITHUB_WORKSPACE, the PR checkout
+# at $GITHUB_WORKSPACE/pr (for the waiver list), Go on PATH, and
+# pull-requests: write for the comment. Call it with
+# `if: ${{ !cancelled() }}`, so a failed measurement still gets a comment and
+# a named failure.
+#
+# Files written in $GITHUB_WORKSPACE: arms-check.txt, benchstat-output.txt,
+# gate-report.txt and bench-comment.md (the comment body).
+#
+# Policy: a threshold left empty takes benchgate's default, or the matching
+# BENCH_* variable when the job sets one (benchgate reads them).
+
+inputs:
+  waivers:
+    description: >-
+      Reviewed waiver list, relative to the repository root (read from pr/,
+      so a PR is judged by its own list). A missing file means no waivers,
+      which can only make the gate stricter. Empty means no waivers.
+    required: false
+    default: .github/quality/benchstat-waivers.txt
+  threshold:
+    description: Timing gate in percent (sec/op, B/s). Empty means benchgate's default (15).
+    required: false
+    default: ""
+  alloc-threshold:
+    description: Allocation gate in percent (B/op, allocs/op). Empty means benchgate's default (5).
+    required: false
+    default: ""
+  variance-ceiling:
+    description: >-
+      Runner fitness ceiling in percent: a timing row whose own interval is at
+      or above it is UNMEASURABLE (exit 3, re-measure). Empty means benchgate's
+      default (30).
+    required: false
+    default: ""
+  alpha:
+    description: Significance level. Empty means benchgate's default (0.05).
+    required: false
+    default: ""
+  benchgate-version:
+    description: >-
+      Version of github.com/luthersystems/elps/cmd/benchgate. Pinned, not
+      @latest: @latest would let a change in elps alter a repo's verdicts with
+      no diff to review and no way to reproduce an old run. A pin makes a gate
+      change a one-line PR.
+    required: false
+    default: v1.85.0
+  benchstat-version:
+    description: >-
+      Version of golang.org/x/perf/cmd/benchstat. Pinned because the gate
+      fails closed (exit 2) when it cannot read benchstat's table, so a format
+      change on @latest would fail every PR at once with no repo change.
+    required: false
+    default: v0.0.0-20260709024250-82a0b07e230d
+  comment:
+    description: '"true": post or update one PR comment with the comparison.'
+    required: false
+    default: "true"
+  count:
+    description: Samples per arm, for the comment footer (the count given to benchmark-run).
+    required: false
+    default: "10"
+  base-sha:
+    description: Optional. The base commit, for the comment footer (actions/pr-base's sha output).
+    required: false
+    default: ""
+  base-source:
+    description: Optional. How the base was chosen (actions/pr-base's source output), for the comment footer.
+    required: false
+    default: ""
+
+outputs:
+  gate-status:
+    description: benchgate's exit code (0 clean, 1 regression, 2 cannot interpret, 3 runner unfit), or empty when the comparison did not run.
+    value: ${{ steps.compare.outputs.gate_status }}
+  comment-file:
+    description: Path of the comment body.
+    value: ${{ steps.compare.outputs.comment_file }}
+
+runs:
+  using: composite
+  steps:
+    # Both tools are built with GOTOOLCHAIN=auto (lib/go-install.sh). setup-go
+    # sets GOTOOLCHAIN=local, which keeps the BENCHMARKS on the PR's
+    # toolchain. These tools only read text, so they do not need that pin, and
+    # it breaks the job when a tool needs a newer Go (x/perf began to need
+    # go >= 1.26.0 on 2026-08-19).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/benchstat-${{ inputs.benchstat-version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-benchstat-${{ inputs.benchstat-version }}
+    - name: Install benchstat
+      shell: bash
+      env:
+        VERSION: ${{ inputs.benchstat-version }}
+        DIR: ${{ runner.temp }}/luther-tools/benchstat-${{ inputs.benchstat-version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "golang.org/x/perf/cmd/benchstat@${VERSION}" benchstat
+
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/benchgate-${{ inputs.benchgate-version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-benchgate-${{ inputs.benchgate-version }}
+    # Installed, not `go run`: go run turns the tool's exit 2 and 3 into 1, so
+    # a bad input or an unfit runner would read as a regression. `go install
+    # pkg@version` ignores the current module; GOFLAGS and GOWORK are cleared
+    # so the repo's build tags and workspace cannot reach a tool that only
+    # reads text.
+    - name: Install benchgate
+      shell: bash
+      env:
+        VERSION: ${{ inputs.benchgate-version }}
+        DIR: ${{ runner.temp }}/luther-tools/benchgate-${{ inputs.benchgate-version }}
+        GOFLAGS: ""
+        GOWORK: "off"
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/luthersystems/elps/cmd/benchgate@${VERSION}" benchgate
+
+    - name: Compare with benchstat
+      id: compare
+      shell: bash
+      env:
+        BENCHGATE: ${{ runner.temp }}/luther-tools/benchgate-${{ inputs.benchgate-version }}/benchgate
+        BENCHSTAT: ${{ runner.temp }}/luther-tools/benchstat-${{ inputs.benchstat-version }}/benchstat
+        WAIVERS_PATH: ${{ inputs.waivers }}
+        THRESHOLD: ${{ inputs.threshold }}
+        ALLOC_THRESHOLD: ${{ inputs.alloc-threshold }}
+        VARIANCE_CEILING: ${{ inputs.variance-ceiling }}
+        ALPHA: ${{ inputs.alpha }}
+        BENCH_COUNT: ${{ inputs.count }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        BASE_SOURCE: ${{ inputs.base-source }}
+      run: bash "$GITHUB_ACTION_PATH/compare.sh"
+
+    # A failed post must not fail the job (fork PRs get a read-only token);
+    # comment.cjs reports it as a warning.
+    - name: Post PR comment
+      if: always() && inputs.comment == 'true' && steps.compare.outputs.comment_file != ''
+      continue-on-error: true
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        BENCH_COMMENT_FILE: ${{ steps.compare.outputs.comment_file }}
+        BENCH_COMMENT_SCRIPT: ${{ github.action_path }}/comment.cjs
+      with:
+        script: |
+          const post = require(process.env.BENCH_COMMENT_SCRIPT);
+          await post({ github, context, core });
+
+    # always(), so this runs when an earlier step failed or the comparison
+    # never ran: a gate that runs only on the happy path is not a gate. Only
+    # gate_status 0 passes; an empty one means no verdict and fails.
+    - name: Fail on regressions
+      if: always() && steps.compare.outputs.gate_status != '0'
+      shell: bash
+      env:
+        GATE_STATUS: ${{ steps.compare.outputs.gate_status }}
+      run: bash "$GITHUB_ACTION_PATH/gate-fail.sh"

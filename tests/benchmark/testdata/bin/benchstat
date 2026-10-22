@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake benchstat: FAKE_STAT_ROWS padding rows, exit FAKE_STAT_RC.
+echo "stub benchstat table"
+for i in $(seq 1 "${FAKE_STAT_ROWS:-0}"); do
+  echo "example.com/m/somepackage   BenchmarkPaddingRowNumber${i}-2   12.3n +/- 2%   12.4n +/- 3%   +0.11% (p=0.412 n=10)"
+done
+exit "${FAKE_STAT_RC:-0}"
