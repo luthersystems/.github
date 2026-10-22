@@ -286,6 +286,12 @@ jobs:
         run: |
           set -euo pipefail
           notes_args="--generate-notes"
+          # Without a start tag GitHub diffs against the latest release of any
+          # major, so a v2 release after an experimental v3.0.0 would list
+          # everything since v3. Start from the latest tag of this major.
+          if [ -n "$LAST_TAG" ]; then
+            notes_args="--generate-notes --notes-start-tag $LAST_TAG"
+          fi
           if [ -n "$NOTES_COMMAND" ]; then
             notes_path="$RUNNER_TEMP/release-notes.md"
             # The caller's own command in the caller's own checkout: it is
