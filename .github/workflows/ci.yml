@@ -71,6 +71,7 @@ jobs:
           docker build -q -t harden-check-test/nss-other-nickname tests/harden-check/nss-other-nickname
           docker build -q -t harden-check-test/chrome-no-nssdb tests/harden-check/chrome-no-nssdb
           docker build -q -t harden-check-test/debian-jdk tests/harden-check/debian-jdk
+          docker build -q -t harden-check-test/keep-removed tests/harden-check/keep-removed
 
       # buildenv#165: a listed certificate under another nickname, and a
       # headless-shell binary with an NSS database. The kit is read from the

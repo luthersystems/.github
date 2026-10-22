@@ -28,7 +28,10 @@
 #     the system store: Node (NODE_OPTIONS=--use-openssl-ca and
 #     SSL_CERT_FILE), uv
 #     (SSL_CERT_FILE, REQUESTS_CA_BUNDLE), and Chrome needs an NSS database;
-#   - an image with no system bundle fails (--min-roots 0 allows it).
+#   - an image with no system bundle fails (--min-roots 0 allows it);
+#   - the positive control: each CA in ca-keep.list (USERTrust, which
+#     today's Sectigo chains end at) is still trusted in every store, so a
+#     store emptied or stripped too far fails instead of passing as clean.
 #
 # A binary or program source file that holds a listed certificate, as PEM
 # text or as its public key in DER (a built-in root list), is reported, and
@@ -83,6 +86,16 @@ CERTS=$policy/ca-distrust
 if [ ! -f "$LIST" ] || [ ! -d "$CERTS" ]; then
 	echo "image.sh: $policy has no ca-distrust.list and ca-distrust/" >&2
 	exit 2
+fi
+# The positive control's list (ca-keep.list). A kit of v0.1.47 or older
+# has none: use the copy beside this script, so every repo on
+# harden-check@v1 gets the check now, not at its next kit bump.
+KEEP_LIST=$policy/ca-keep.list
+KEEP=$policy/ca-keep
+if [ ! -f "$KEEP_LIST" ]; then
+	KEEP_LIST=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/keep/ca-keep.list
+	KEEP=${KEEP_LIST%.list}
+	echo "policy: the kit has no ca-keep.list; using the action's copy"
 fi
 
 for tool in docker openssl awk sha256sum tar; do
@@ -323,6 +336,8 @@ while IFS= read -r f; do
 	# tls-ca-bundle.pem, extracted from the same store, is verified.
 	if [ "$ncerts" -gt 0 ] && [ "$path" != "$P11_TRUST" ]; then
 		bundles=$((bundles + 1))
+		# A public root bundle, for the positive control below.
+		if [ "$ncerts" -ge 100 ]; then printf '%s\n' "$f" >>"$work/root-bundles"; fi
 		while IFS= read -r ok; do
 			bad "$path: ${ok##*/} verifies against it"
 		done < <(openssl verify "${verify_flags[@]}" -CAfile "$dir/bundle" -untrusted "$work/all.pem" "${certs[@]}" 2>/dev/null | sed -n 's/: OK$//p')
@@ -503,6 +518,130 @@ while IFS= read -r exe; do
 		;;
 	esac
 done <"$work/clients"
+
+# The positive control (policy/ca-keep.list): what the policy keeps is still
+# trusted. The checks above prove that the listed CAs fail, and an emptied or
+# over-edited store passes them too, so they cannot tell a correct block from
+# one that breaks every TLS client. Here:
+#
+#   - each kept intermediate (a current Sectigo CA) verifies against each
+#     public root bundle: a PEM file with 100 or more certificates (the
+#     system bundle, certifi), and the file that SSL_CERT_FILE or
+#     REQUESTS_CA_BUNDLE names. Go, Node (--use-openssl-ca), uv, Python
+#     requests, curl and git read these files, so a chain they accept
+#     verifies here;
+#   - each kept root (USERTrust RSA and ECC) is in each Java keystore, and no
+#     blocked.certs blocks a kept certificate;
+#   - no NSS database distrusts a kept certificate, or one with its key.
+#
+# A kept certificate that ca-distrust.list lists too, or that has a listed
+# key, is a broken policy: the check exits 2.
+if [ -f "$KEEP_LIST" ]; then
+	declare -A keep=() keep_key=() distrust_key=()
+	for c in "$CERTS"/*.pem; do
+		distrust_key[$(openssl x509 -in "$c" -noout -pubkey | openssl pkey -pubin -outform der | sha256sum | cut -c1-64)]=1
+	done
+	keep_roots=() keep_ints=()
+	while read -r fp kind file _; do
+		case $fp in '' | '#'*) continue ;; esac
+		got=$(openssl x509 -in "$KEEP/$file" -outform der | sha256sum | cut -c1-64)
+		[ "$got" = "$fp" ] || { echo "image.sh: $file has sha256 $got, the keep list says $fp" >&2; exit 2; }
+		kfp=$(openssl x509 -in "$KEEP/$file" -noout -pubkey | openssl pkey -pubin -outform der | sha256sum | cut -c1-64)
+		if [ -n "${listed[$fp]:-}" ] || [ -n "${distrust_key[$kfp]:-}" ]; then
+			echo "image.sh: $file is kept and distrusted: fix the policy" >&2
+			exit 2
+		fi
+		keep[$fp]=$file
+		keep_key[$kfp]=$file
+		case $kind in
+		root) keep_roots+=("$fp") ;;
+		intermediate) keep_ints+=("$KEEP/$file") ;;
+		*) echo "image.sh: $KEEP_LIST: $fp: kind must be root or intermediate, not $kind" >&2; exit 2 ;;
+		esac
+	done <"$KEEP_LIST"
+
+	# -no_check_time: the kept intermediates expire in 2030, and the control
+	# must not start to fail on that date.
+	keep_flags=("${verify_flags[@]}")
+	if openssl verify -no_check_time "${verify_flags[@]}" -CAfile "$control" "$control" >/dev/null 2>&1; then
+		keep_flags=(-no_check_time "${verify_flags[@]}")
+	fi
+	for v in SSL_CERT_FILE REQUESTS_CA_BUNDLE; do
+		cf=$(envval "$v")
+		[ -n "$cf" ] || continue
+		# A file the variable names that is not in the image is reported by
+		# the client rules above.
+		if host=$(in_root "$cf"); then
+			allowed "${host#"$root"}" || printf '%s\n' "$host" >>"$work/root-bundles"
+		fi
+	done
+	touch "$work/root-bundles"
+	sort -u "$work/root-bundles" -o "$work/root-bundles"
+	nkeep=0
+	while IFS= read -r f; do
+		for c in "${keep_ints[@]}"; do
+			if openssl verify "${keep_flags[@]}" -CAfile "$f" "$c" >/dev/null 2>&1; then
+				nkeep=$((nkeep + 1))
+			else
+				bad "${f#"$root"}: kept ${c##*/} does not verify against it (a root it needs was removed)"
+			fi
+		done
+	done <"$work/root-bundles"
+	echo "keep: ${#keep_ints[@]} kept intermediate(s), $(wc -l <"$work/root-bundles") root bundle(s)"
+
+	# Java.
+	while IFS= read -r -d '' ks; do
+		path=${ks#"$root"}
+		allowed "$path" && continue
+		is_binary "$ks" || continue
+		out=$(keytool -list -keystore "$ks" -storepass changeit 2>&1) || continue # reported above
+		ksfps=$(sed -n 's/.*fingerprint (SHA-256): //p' <<<"$out" | tr -d : | tr 'A-F' 'a-f')
+		for fp in "${keep_roots[@]}"; do
+			grep -qx "$fp" <<<"$ksfps" || bad "$path: does not hold kept root ${keep[$fp]}"
+		done
+	done <"$work/keystores"
+	while IFS= read -r -d '' bc; do
+		path=${bc#"$root"}
+		allowed "$path" && continue
+		for fp in "${!keep[@]}"; do
+			if grep -qxi "$fp" "$bc"; then bad "$path: blocks kept ${keep[$fp]}"; fi
+		done
+	done < <(find "$root" -type f -name blocked.certs -print0)
+
+	# NSS: a CA with no trust flag for TLS (C, c or T) that is marked p is
+	# distrusted.
+	if [ -s "$work/nss" ]; then
+		while IFS= read -r -d '' db; do
+			d=$(dirname "$db")
+			path=${d#"$root"}
+			allowed "$path" && continue
+			case $db in *cert9.db) spec=sql:$d ;; *) spec=dbm:$d ;; esac
+			out=$(certutil -L -d "$spec" 2>/dev/null) || continue # reported above
+			while IFS=$'\t' read -r nick trust; do
+				ssl=${trust%%,*}
+				case $ssl in *[CcT]*) continue ;; *p*) ;; *) continue ;; esac
+				pems=$(certutil -L -d "$spec" -n "$nick" -a 2>/dev/null) || continue
+				ndir=$(mktemp -d -p "$work")
+				awk -v dir="$ndir" '
+					/^-----BEGIN CERTIFICATE-----/ { n++; out = sprintf("%s/%05d.pem", dir, n); inblk = 1 }
+					inblk { print > out }
+					/^-----END CERTIFICATE-----/ { inblk = 0; close(out) }' <<<"$pems"
+				for pem in "$ndir"/*.pem; do
+					[ -e "$pem" ] || continue
+					fp=$(openssl x509 -in "$pem" -outform der 2>/dev/null | sha256sum | cut -c1-64)
+					kfp=$(openssl x509 -in "$pem" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | cut -c1-64) || kfp=
+					if [ -n "${keep[$fp]:-}" ]; then
+						bad "$path: distrusts kept ${keep[$fp]} ('$nick', trust $trust)"
+					elif [ -n "${keep_key[$kfp]:-}" ]; then
+						bad "$path: '$nick' has the key of kept ${keep_key[$kfp]} and trust $trust"
+					fi
+				done
+				rm -rf "$ndir"
+			done < <(sed -nE 's/^(.*[^[:space:]])[[:space:]]+([A-Za-z]*,[A-Za-z]*,[A-Za-z]*)[[:space:]]*$/\1\t\2/p' <<<"$out")
+		done <"$work/nss"
+	fi
+	[ "$fail" -ne 0 ] || echo "keep: $nkeep chain check(s) passed; kept roots in every Java keystore, no kept certificate distrusted"
+fi
 
 # Roots compiled into a binary as DER (Go's x509roots/fallback, Node,
 # Chrome, uv): search each binary for each listed certificate's public key,

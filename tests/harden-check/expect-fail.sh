@@ -42,6 +42,12 @@ expect "an image that trusts the listed CAs" 1 '^FAIL: /etc/ssl/certs/ca-certifi
 expect "headless-shell with no NSS database (buildenv#165)" 1 'headless-shell: Chrome uses its built-in roots' \
 	HC_DOCKERFILES="$here/chrome-no-nssdb" HC_IMAGES="harden-check-test/chrome-no-nssdb"
 
+# The positive control: the image lost USERTrust RSA, a CA the policy keeps.
+# The dockerfiles input is not given: the fixture runs a command after the
+# kit on purpose.
+expect "an image that lost a kept CA" 1 '^FAIL: /etc/ssl/certs/ca-certificates.crt: kept sectigo-rsa-dv-secure-server-ca.pem does not verify' \
+	HC_KIT="$kit" HC_IMAGES="harden-check-test/keep-removed"
+
 expect "a Dockerfile that pins another kit" 2 'a Dockerfile pins luthersystems/build-harden:v0.1.46@' \
 	HC_KIT="luthersystems/build-harden:v0.1.44@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 	HC_DOCKERFILES="$here/nss-other-nickname"
