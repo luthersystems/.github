@@ -39,6 +39,7 @@ kit release and no PR per repo.
 |---|---|---|
 | `kit` | read from the Dockerfiles | The kit image, pinned by digest. Set it for an image with no Dockerfile (ko) or one built on a hardened base image. A Dockerfile that pins another kit fails. |
 | `dockerfiles` | none | Dockerfiles or directories to check: the kit must run last in the final stage. |
+| `same-kit` | none | Files that must pin the kit checked but get no Dockerfile check, such as a Dockerfile whose final stage is a hardened base image while an earlier stage runs the kit. A file that pins another kit, or none, fails. This catches a kit bump that misses a file. |
 | `images` | none | One image per line: `REF`, or `REF PLATFORM` for a tag that holds one platform (separate amd64 and arm64 tags). |
 | `platforms` | the image's default | Platforms to check for each image line that names none. |
 | `min-roots` | `100` | The fewest certificates the system bundle must hold. `0` allows an image with no TLS client. |
@@ -67,3 +68,5 @@ that needs callers to change goes to `v2`. `release.yml` cuts the releases.
 a plain Alpine image fails, and fixtures in `tests/harden-check` cover an NSS
 database that holds a listed certificate under another nickname, and a
 chromedp `headless-shell` binary (both from luthersystems/buildenv#165).
+The `same-kit` fixtures cover a file that pins the kit checked (passes),
+another kit and no kit (both fail).

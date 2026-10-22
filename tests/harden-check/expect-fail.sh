@@ -20,7 +20,7 @@ expect() {
 	local name=$1 want=$2 pattern=$3 log rc=0 other=
 	shift 3
 	log=$(mktemp)
-	env HC_KIT= HC_DOCKERFILES= HC_IMAGES= HC_PLATFORMS= HC_ALLOW= "$@" bash "$script" >"$log" 2>&1 || rc=$?
+	env HC_KIT= HC_DOCKERFILES= HC_SAME_KIT= HC_IMAGES= HC_PLATFORMS= HC_ALLOW= "$@" bash "$script" >"$log" 2>&1 || rc=$?
 	if [ -n "${ONLY:-}" ]; then
 		other=$(grep '^FAIL: ' "$log" | grep -v ' does not hold the build-harden policy$' | grep -vE -- "$ONLY" || true)
 	fi
@@ -33,6 +33,13 @@ expect() {
 	fi
 	rm -f "$log"
 }
+
+# same-kit: a file that pins another kit, or none, fails before any image
+# is checked (exit 2, the check could not be trusted).
+expect "a same-kit file that pins another kit" 2 'same-kit: .*other-kit.Dockerfile pins luthersystems/build-harden:v0.1.44' \
+	HC_KIT="$kit" HC_SAME_KIT="$here/same-kit/other-kit.Dockerfile" HC_IMAGES="alpine:3.22"
+expect "a same-kit file that pins no kit" 2 'same-kit: .*no-kit.Dockerfile pins no luthersystems/build-harden stage' \
+	HC_KIT="$kit" HC_SAME_KIT="$here/same-kit/no-kit.Dockerfile" HC_IMAGES="alpine:3.22"
 
 expect "an image that trusts the listed CAs" 1 '^FAIL: /etc/ssl/certs/ca-certificates.crt: holds ' \
 	HC_KIT="$kit" HC_IMAGES="alpine:3.22@sha256:822614ea121e1d40a33655081af10ef85f0aa2ab9e61f649ceaf0c651822433c"

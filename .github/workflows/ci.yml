@@ -79,6 +79,9 @@ jobs:
         uses: ./actions/harden-check
         with:
           dockerfiles: tests/harden-check/nss-other-nickname/Dockerfile
+          # A file shaped like connectorhub's Dockerfile-go: it must pin the
+          # kit read from the Dockerfile above.
+          same-kit: tests/harden-check/same-kit/same-kit.Dockerfile
           images: harden-check-test/nss-other-nickname ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
 
       - name: Dockerfile check cases
