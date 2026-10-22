@@ -1,0 +1,151 @@
+name: benchmark run
+description: >-
+  Measure the Go benchmarks of two checkouts, base/ and pr/, on this runner,
+  interleaved, and check that the two outputs can be compared.
+
+# Why: a benchmark gate is only as good as its two arms. This is the shared
+# copy of what luthersystems/elps and luthersystems/substrate each ran: both
+# arms measured in one job on one runner (not a baseline cached from another
+# machine, which charged the hardware difference to the code), rounds
+# interleaved so runner drift reaches both arms, GOMAXPROCS pinned so the
+# benchmark names match, and three checks that turn a silent bad comparison
+# into a named failure. benchmark-gate compares the files this writes.
+#
+# Needs: the base commit checked out at $GITHUB_WORKSPACE/base and the PR
+# merge commit at $GITHUB_WORKSPACE/pr, and Go set up from pr/go.mod with
+# GOTOOLCHAIN=local (as actions/setup-go sets), so both arms build with the
+# PR's toolchain.
+#
+# Files written in $GITHUB_WORKSPACE:
+#   bench-base-raw.txt, bench-pr-raw.txt   go test output of each arm
+#   bench-baseline.txt, bench-current.txt  the result rows benchstat reads
+#   bench-build-failures.txt               packages that did not build (only
+#                                          when there are some)
+# It also sets BENCH_GOMAXPROCS for later steps of the job; benchmark-gate
+# tells benchgate the name suffix from it.
+#
+# Fails when: a go test fails (see allow-build-failures), a PR-arm benchmark
+# has fewer than `count` samples, or the arms are not comparable (platform,
+# CPU or GOMAXPROCS mismatch, no names in common, or a package with
+# benchmarks that did not build).
+
+inputs:
+  directory:
+    description: The Go module directory, relative to the repo root. go test runs there; prepare runs at the repo root.
+    required: false
+    default: "."
+  packages:
+    description: Packages to benchmark, space separated.
+    required: false
+    default: ./...
+  bench:
+    description: The -bench regexp.
+    required: false
+    default: .
+  skip:
+    description: >-
+      The -skip regexp; empty means none. elps uses 'Parallel$': a RunParallel
+      benchmark measures contention, which GOMAXPROCS=1 cannot show.
+    required: false
+    default: ""
+  benchtime:
+    description: The -benchtime of each run.
+    required: false
+    default: 100ms
+  count:
+    description: >-
+      Interleaved rounds, so samples per arm. 10, not benchstat's minimum of
+      6: below 6 benchstat computes no confidence interval ("need >= 6
+      samples"), and at 5 the Mann-Whitney p-value floors at 0.008, which only
+      says "every sample ranked one way". That is how a runner bias looks
+      significant.
+    required: false
+    default: "10"
+  timeout:
+    description: The -timeout of each go test.
+    required: false
+    default: 15m
+  gomaxprocs:
+    description: >-
+      GOMAXPROCS for each go test, so the benchmark names cannot change with
+      the runner size (go test adds -N to each name, and arms with different
+      N pair nothing). 1, not the core count (elps#767): with 2 Ps on a shared
+      4-vCPU runner the GC's background mark workers ran on the second P, and
+      allocation-heavy rows varied by 6-13% on identical code against 1% at
+      GOMAXPROCS=1. One P keeps the GC cost in the timed loop, so the gate
+      still sees an allocation regression's time. Measure RunParallel
+      benchmarks in a separate run (skip them here).
+    required: false
+    default: "1"
+  env:
+    description: >-
+      KEY=VALUE lines set for each arm's go test. The text ${ARM_DIR} in a
+      value becomes that arm's absolute directory (plain text substitution,
+      never eval), for example
+      SUBSTRATEHCP_FILE=${ARM_DIR}/cmd/substratehcp/build/substratehcp-local.
+    required: false
+    default: ""
+  prepare:
+    description: >-
+      Shell command run once in each arm's directory before measuring, with
+      ARM_DIR set, for example `make substratehcplocaltestbuild`. A failure
+      fails the job.
+    required: false
+    default: ""
+  allow-build-failures:
+    description: >-
+      "true": a go test that fails only because packages did not build or set
+      up is a warning, not a failure. For packages with no benchmarks that the
+      runner cannot build (substrate: a private module). A package WITH
+      benchmarks that does not build still fails the arms check.
+    required: false
+    default: "false"
+
+outputs:
+  gomaxprocs:
+    description: The GOMAXPROCS the arms ran at.
+    value: ${{ inputs.gomaxprocs }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run benchmarks (both arms, interleaved)
+      shell: bash
+      env:
+        BENCH_DIRECTORY: ${{ inputs.directory }}
+        BENCH_PACKAGES: ${{ inputs.packages }}
+        BENCH_REGEX: ${{ inputs.bench }}
+        BENCH_SKIP: ${{ inputs.skip }}
+        BENCH_TIME: ${{ inputs.benchtime }}
+        BENCH_COUNT: ${{ inputs.count }}
+        BENCH_TIMEOUT: ${{ inputs.timeout }}
+        BENCH_GOMAXPROCS: ${{ inputs.gomaxprocs }}
+        BENCH_ENV: ${{ inputs.env }}
+        BENCH_PREPARE: ${{ inputs.prepare }}
+        BENCH_ALLOW_BUILD_FAILURES: ${{ inputs.allow-build-failures }}
+      run: bash "$GITHUB_ACTION_PATH/run-arms.sh"
+
+    # Tell benchgate, in benchmark-gate, which -N suffix the names carry. At 1
+    # go test adds none, and without this benchgate would strip a benchmark's
+    # own trailing -N (elps's Package/get-nested-baseline-2).
+    - name: Record GOMAXPROCS for the gate
+      shell: bash
+      env:
+        PROCS: ${{ inputs.gomaxprocs }}
+      run: echo "BENCH_GOMAXPROCS=${PROCS}" >>"$GITHUB_ENV"
+
+    - name: Filter and check sample counts
+      shell: bash
+      env:
+        BENCH_COUNT: ${{ inputs.count }}
+      run: bash "$GITHUB_ACTION_PATH/filter.sh"
+
+    # Comparability before comparison: benchstat gives a normal-looking table
+    # with nothing paired when the arms do not match, so name the cause here.
+    - name: Check the arms are comparable
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        BENCH_ARMS_BASE_RAW: bench-base-raw.txt
+        BENCH_ARMS_PR_RAW: bench-pr-raw.txt
+      run: bash "$GITHUB_ACTION_PATH/arms-check.sh" bench-baseline.txt bench-current.txt

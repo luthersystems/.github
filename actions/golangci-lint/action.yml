@@ -1,0 +1,61 @@
+name: golangci-lint
+description: >-
+  Run golangci-lint, with the repo's own .golangci.yml, on each Go module, and
+  report how far that config has drifted from the shared baseline.
+
+# Why the repo's own config: golangci-lint v2 cannot import a shared config,
+# and each repo has exclusions it has reviewed. So the lint result is the
+# repo's own, the same as a local `golangci-lint run`.
+#
+# Why a drift report: the owner wants every repo to move toward one linter
+# set (quality/golangci-baseline.yml), but chose to report the difference,
+# not to fail on it. The report goes to the job summary and a notice; it
+# never changes the job's result.
+#
+# Needs: Go on PATH, set up from the repo's go.mod (golangci-lint
+# type-checks the code), and access to private modules when the repo has
+# any.
+
+inputs:
+  directories:
+    description: Module directories, space separated. Empty means every go.mod outside vendor/, testdata/ and node_modules/.
+    required: false
+    default: ""
+  version:
+    description: >-
+      golangci-lint version. Pinned so a release cannot change a result with
+      no change in the repo. Keep it equal to the gosec action's version: it
+      is the same tool, so one cache entry serves both jobs, and both must
+      read the export data of the newest Go a repo uses (v2.13.2 cannot
+      type-check with Go 1.27, v2.15.0 can).
+    required: false
+    default: v2.15.0
+  baseline-report:
+    description: >-
+      "true" writes the drift from the shared baseline to the job summary.
+      It never fails the job.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Restores the binary this repo built for this version, if any (see
+    # lib/go-install.sh for why a cache and why go install). The key is the
+    # gosec action's key, so the two jobs share one build.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/golangci-lint-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-golangci-lint-${{ inputs.version }}
+    - name: Install golangci-lint
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        DIR: ${{ runner.temp }}/luther-tools/golangci-lint-${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${VERSION}" golangci-lint
+    - name: Run golangci-lint
+      shell: bash
+      env:
+        DIRS: ${{ inputs.directories }}
+        BASELINE_REPORT: ${{ inputs.baseline-report }}
+      run: bash "$GITHUB_ACTION_PATH/golangci-lint.sh"

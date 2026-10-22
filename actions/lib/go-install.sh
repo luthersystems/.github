@@ -14,6 +14,8 @@ set -euo pipefail
 dir="$1" mod="$2" bin="$3"
 mkdir -p "$dir"
 if [ ! -x "$dir/$bin" ]; then
-  GOTOOLCHAIN=auto GOBIN="$dir" go install "$mod"
+  # GOFLAGS and GOWORK are the caller's settings for its own code (for
+  # example -mod=vendor); they must not change how a pinned tool builds.
+  GOTOOLCHAIN=auto GOFLAGS="" GOWORK=off GOBIN="$dir" go install "$mod"
 fi
 echo "$dir" >>"${GITHUB_PATH:-/dev/null}"

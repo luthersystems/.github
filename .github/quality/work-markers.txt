@@ -1,0 +1,6 @@
+# Allowlist for the work marker gate (actions/work-markers), which this repo
+# runs on itself in CI. Only for words that are not work: copied source,
+# data, quoted text. Deferred work names its issue on the marker instead.
+#
+# path | text | expires | issue | reason
+docs/quality-workflow.md | TODO: pick right version number | never | - | An example allowlist row quoted in the docs.

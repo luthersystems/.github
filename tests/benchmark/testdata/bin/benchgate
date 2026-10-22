@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Fake benchgate: records its arguments and BENCH_GOMAXPROCS in
+# FAKE_GATE_ARGS, prints a report with the lines named by FAKE_GATE_LINES
+# (waived, noise, unfit; space separated) and FAKE_GATE_ROWS padding rows,
+# and exits FAKE_GATE_RC.
+echo "BENCH_GOMAXPROCS=${BENCH_GOMAXPROCS-<unset>} args=$*" >>"${FAKE_GATE_ARGS:-/dev/null}"
+for l in ${FAKE_GATE_LINES:-}; do
+  case "$l" in
+    waived) echo '  WAIVED      pkg B/op Encode-2 delta=+12.45% accepted: ceiling 14%' ;;
+    noise) echo '  NOISE-FLOOR pkg ns/op Get-2 delta=+16% spread=24%' ;;
+    unfit) echo '  UNMEASURABLE pkg ns/op Get-2 delta=+40% interval=71%' ;;
+  esac
+done
+echo "stub gate report"
+for i in $(seq 1 "${FAKE_GATE_ROWS:-0}"); do
+  echo "  example.com/m/somepackage   ns/op   BenchmarkPaddingRowNumber${i}-2   delta=+0.11% p=0.412 (gate 15%)"
+done
+exit "${FAKE_GATE_RC:-0}"
