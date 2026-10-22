@@ -81,12 +81,6 @@ jobs:
           dockerfiles: tests/harden-check/nss-other-nickname/Dockerfile
           images: harden-check-test/nss-other-nickname ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
 
-      - name: "Pass: a Debian JDK whose keystore and blocked.certs are links"
-        uses: ./actions/harden-check
-        with:
-          dockerfiles: tests/harden-check/debian-jdk
-          images: harden-check-test/debian-jdk
-
       - name: Dockerfile check cases
         run: bash tests/harden-check/dockerfile-test.sh
 

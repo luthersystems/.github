@@ -156,7 +156,9 @@ chmod -R u+rwX "$root"
 # The read stops at the first NUL and after 16 MiB, so a large file is not
 # read in full. A binary whose first NUL is later is read as text, which can
 # only make the check stricter (a PEM scan fails, a binary only warns).
-is_binary() { [ "$(head -c 16777216 "$1" | tr -dc '\000' | head -c 1 | wc -c)" -gt 0 ]; }
+# tr's broken pipe, once head has its byte, is expected: its message is
+# dropped.
+is_binary() { [ "$(head -c 16777216 "$1" 2>/dev/null | tr -dc '\000' 2>/dev/null | head -c 1 | wc -c)" -gt 0 ]; }
 
 # in_root PATH: the file PATH names in the image, with every link resolved
 # inside the image root. A plain test of "$root$PATH" would follow an absolute

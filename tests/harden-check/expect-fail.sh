@@ -35,6 +35,13 @@ expect "an image that trusts the listed CAs" 1 '^FAIL: /etc/ssl/certs/ca-certifi
 expect "headless-shell with no NSS database (buildenv#165)" 1 'headless-shell: Chrome uses its built-in roots' \
 	HC_DOCKERFILES="$here/chrome-no-nssdb" HC_IMAGES="harden-check-test/chrome-no-nssdb"
 
+# The kit v0.1.45 does not edit a blocked.certs that is a link
+# (luthersystems/buildenv#166), and the check resolves it inside the image.
+# Move this case to the passing ones in ci.yml once a kit with the fix is
+# released and the fixture pins it.
+expect "a Debian JDK whose blocked.certs is a link (buildenv#166)" 1 '^FAIL: /etc/java-17-openjdk/security/blocked.certs: does not block ' \
+	HC_DOCKERFILES="$here/debian-jdk" HC_IMAGES="harden-check-test/debian-jdk"
+
 expect "a Dockerfile that pins another kit" 2 'a Dockerfile pins luthersystems/build-harden:v0.1.45@' \
 	HC_KIT="luthersystems/build-harden:v0.1.44@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 	HC_DOCKERFILES="$here/nss-other-nickname"
