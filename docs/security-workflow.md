@@ -157,6 +157,32 @@ as the fingerprint the log prints (`commit:file:rule:line` for a commit,
    repo has the caller: a required check that no workflow reports blocks
    every merge.
 
+### The org ruleset
+
+An org owner adds it at
+<https://github.com/organizations/luthersystems/settings/rules>:
+
+1. **New ruleset** → **New branch ruleset**.
+2. **Ruleset name**: `security`. **Enforcement status**: `Active`.
+3. **Bypass list**: leave it empty, so the rule holds for admins too. (Add
+   `Organization admin` only if you want a break-glass merge.)
+4. **Target repositories**: **All repositories**.
+5. **Target branches**: **Add target** → **Include default branch**.
+6. **Rules**: tick only **Require status checks to pass**. Under it:
+   - **Add checks** → type `security / result`, and pick the
+     **GitHub Actions** source, so another app cannot report the name.
+   - Leave **Require branches to be up to date** off: the check does not
+     depend on the base.
+   - Tick **Do not require status checks on creation**, so a new repo can
+     push its first commit (and its caller) to main.
+7. **Create**.
+
+A new repo must add the caller in its first PR; until then the ruleset
+blocks every PR in it. Each repo's older per-repo govulncheck workflows can
+go after the ruleset is on (one cleanup PR per repo), and a repo that lists
+one of them as a required check in branch protection drops it from that
+list in the same step.
+
 ## Tests
 
 `tests/security/security-test.sh` runs each check on fixtures that must fail
