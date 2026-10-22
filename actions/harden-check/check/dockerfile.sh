@@ -38,11 +38,15 @@ run_re='^[[:space:]]*RUN[[:space:]]+--mount=type=bind,([^[:space:]]*,)?target=/h
 # The kit stage: FROM luthersystems/build-harden:<tag>@sha256:<digest> AS <name>.
 kit_re='^[[:space:]]*FROM[[:space:]]+(--platform=[^[:space:]]+[[:space:]]+)?luthersystems/build-harden:[^[:space:]@]+@sha256:[0-9a-f]{64}[[:space:]]+AS[[:space:]]+'
 
+# --list-kits (first argument): print the kit image of each build-harden
+# stage in the Dockerfiles and check nothing. The harden-check action uses it
+# to find the kit, so the Dockerfiles are parsed in one place only.
 local_kit=0
-if [ "${1:-}" = --allow-local-kit ]; then
-	local_kit=1
-	shift
-fi
+list_kits=0
+case ${1:-} in
+--allow-local-kit) local_kit=1; shift ;;
+--list-kits) list_kits=1; shift ;;
+esac
 
 files=()
 for arg in "${@:-.}"; do
@@ -61,6 +65,10 @@ fail=0
 for f in "${files[@]}"; do
 	# Drop comment lines, then join continued lines.
 	text=$(grep -v '^[[:space:]]*#' "$f" | awk '{ if (sub(/\\[[:space:]]*$/, "")) { buf = buf $0 " "; next } print buf $0; buf = "" } END { if (buf != "") print buf }')
+	if [ "$list_kits" = 1 ]; then
+		grep -iE "$kit_re" <<<"$text" | awk '{ for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; break } }' || true
+		continue
+	fi
 	last_from=$(grep -n '^[[:space:]]*FROM[[:space:]]' <<<"$text" | tail -1 | cut -d: -f1)
 	stage=$(tail -n +"${last_from:-1}" <<<"$text")
 	base=$(head -1 <<<"$stage" | awk '{ for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; exit } }')
@@ -94,7 +102,9 @@ for f in "${files[@]}"; do
 		continue
 	fi
 	after=$(tail -n +"$((run_line + 1))" <<<"$stage")
-	if grep -qE "$pkg_re" <<<"$after"; then
+	# Only a RUN runs a command: a CMD, ENTRYPOINT or HEALTHCHECK that names
+	# curl or npm runs in the container, not in the build.
+	if grep -E '^[[:space:]]*RUN[[:space:]]' <<<"$after" | grep -qE "$pkg_re"; then
 		echo "FAIL: $f: a package or install step follows harden.sh" >&2
 		fail=1
 		continue

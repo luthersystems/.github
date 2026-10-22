@@ -80,5 +80,8 @@ jobs:
           dockerfiles: tests/harden-check/nss-other-nickname/Dockerfile
           images: harden-check-test/nss-other-nickname ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
 
+      - name: Dockerfile check cases
+        run: bash tests/harden-check/dockerfile-test.sh
+
       - name: "Fail: the failing cases fail, for the right reason"
         run: bash tests/harden-check/expect-fail.sh

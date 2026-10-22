@@ -65,20 +65,16 @@ done <<<"${HC_ALLOW:-}"
 # The Dockerfiles' kits: the build-harden stages they pin. The image check
 # must read the policy of the kit that hardened the image, so a Dockerfile
 # that pins another kit than the one checked fails.
-df_kits=()
 for f in "${dockerfiles[@]}"; do
 	[ -e "$f" ] || die "$f: no such file or directory"
-	if [ -d "$f" ]; then set -- "$f"/Dockerfile*; else set -- "$f"; fi
-	for g in "$@"; do
-		[ -f "$g" ] || continue
-		# The same files dockerfile.sh checks: not its notes or ignore file.
-		case $g in *.dockerignore | *.md) continue ;; esac
-		while IFS= read -r k; do df_kits+=("$k"); done < <(
-			grep -v '^[[:space:]]*#' "$g" |
-				sed -nE 's/^[[:space:]]*FROM[[:space:]]+(--platform=[^[:space:]]+[[:space:]]+)?(luthersystems\/build-harden:[^[:space:]]+)[[:space:]]+AS[[:space:]].*/\2/Ip'
-		)
-	done
 done
+# dockerfile.sh parses the Dockerfiles (comments, continued lines, which
+# files of a directory count), so the kit found here is the one it checks.
+df_kits=()
+if [ "${#dockerfiles[@]}" -gt 0 ]; then
+	kits_out=$(bash "$here/check/dockerfile.sh" --list-kits "${dockerfiles[@]}") || die "cannot read the Dockerfiles: $kits_out"
+	while IFS= read -r k; do df_kits+=("$k"); done <<<"$kits_out"
+fi
 mapfile -t df_kits < <(printf '%s\n' "${df_kits[@]}" | sed '/^$/d' | sort -u)
 
 kit=${HC_KIT:-}
@@ -135,21 +131,19 @@ for t in openssl python3; do
 done
 
 # check_image REF PLATFORM: run image.sh. keytool and certutil are installed
-# only when image.sh says the image needs them (it exits 2 and names the
-# tool), so an image with no Java keystore and no NSS database skips the apt
-# work.
+# only when image.sh says the image needs them (exit 3: keytool, 4:
+# certutil), so an image with no Java keystore and no NSS database skips the
+# apt work. image.sh asks before it scans, so a retry costs one export.
 check_image() {
-	local ref=$1 platform=$2 log rc need
-	log=$work/image.log
+	local ref=$1 platform=$2 rc
 	for _ in 1 2 3; do
 		rc=0
-		bash "$here/check/image.sh" --policy "$work/policy" "${check_args[@]}" ${platform:+--platform "$platform"} "$ref" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
-		[ "$rc" -eq 2 ] || return "$rc"
-		need=()
-		grep -q 'install keytool' "$log" && need+=(default-jre-headless)
-		grep -q 'install certutil' "$log" && need+=(libnss3-tools)
-		[ "${#need[@]}" -gt 0 ] || return 2
-		apt_install "${need[@]}" || return 2
+		bash "$here/check/image.sh" --policy "$work/policy" "${check_args[@]}" ${platform:+--platform "$platform"} "$ref" 2>&1 || rc=$?
+		case $rc in
+		3) apt_install default-jre-headless || return 2 ;;
+		4) apt_install libnss3-tools || return 2 ;;
+		*) return "$rc" ;;
+		esac
 	done
 	return 2
 }

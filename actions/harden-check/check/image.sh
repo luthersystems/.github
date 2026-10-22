@@ -19,8 +19,9 @@
 #     trusted, such as one that cross-signed it;
 #   - the system bundle still holds at least --min-roots roots (default 100),
 #     so an emptied trust store fails instead of passing as clean;
-#   - no Java cacerts keystore holds a listed certificate, and every JDK's
-#     lib/security/blocked.certs blocks every one;
+#   - no Java cacerts keystore holds a listed certificate, and each JDK
+#     keystore has a lib/security/blocked.certs beside it that blocks every
+#     one;
 #   - every NSS database distrusts every listed certificate (trust p,p,p).
 #
 #   - the image's environment points each client with its own root list at
@@ -40,6 +41,8 @@
 # that harden.sh applied, so it must read the same list.
 # --allow skips a file (in the image's paths) for every check; give the
 # reason in the caller, where a reviewer sees it.
+# Exit: 0 holds the policy, 1 does not, 2 could not check, 3 the host needs
+# keytool, 4 the host needs certutil.
 #
 # Why this copy is in luthersystems/.github and not only in the kit: a fix to
 # the check then reaches every repo through the harden-check@v1 tag, with no
@@ -47,6 +50,12 @@
 # certificates that harden.sh distrusts and the ones checked here are always
 # the same list.
 set -euo pipefail
+# An unexpected failure (a tool that crashes, a full disk) means the image
+# could not be checked: exit 2, never 1, which is kept for a policy failure.
+trap 'echo "image.sh: unexpected error at line $LINENO" >&2; exit 2' ERR
+# Exit codes: 0 the image holds the policy, 1 it does not, 2 it could not be
+# checked, 3 the host needs keytool, 4 the host needs certutil (a caller can
+# install the tool and run again).
 
 P11_TRUST=/etc/pki/ca-trust/extracted/openssl/ca-bundle.trust.crt
 
@@ -131,6 +140,34 @@ fi
 chmod -R u+rwX "$root"
 
 
+# is_binary FILE: FILE holds a NUL byte.
+is_binary() { [ "$(tr -d '\000' <"$1" | wc -c)" -ne "$(wc -c <"$1")" ]; }
+
+# in_root PATH: the file PATH names in the image, with every link resolved
+# inside the image root. A plain test of "$root$PATH" would follow an absolute
+# link (/etc/pki/tls/certs/ca-bundle.crt on RHEL) to the host's own file.
+# Prints the host path of the target; fails if it is not a regular file.
+in_root() {
+	local todo=$1 done_='' part hops=0 t
+	while [ -n "$todo" ]; do
+		todo=${todo#/}
+		part=${todo%%/*}
+		if [ "$part" = "$todo" ]; then todo=; else todo=${todo#*/}; fi
+		case $part in '' | .) continue ;; ..) done_=${done_%/*}; continue ;; esac
+		if [ -L "$root$done_/$part" ]; then
+			hops=$((hops + 1))
+			[ "$hops" -le 40 ] || return 1
+			t=$(readlink "$root$done_/$part")
+			case $t in /*) done_= ;; esac
+			todo=$t${todo:+/$todo}
+		else
+			done_=$done_/$part
+		fi
+	done
+	if [ ! -f "$root$done_" ] || [ -L "$root$done_" ]; then return 1; fi
+	printf '%s\n' "$root$done_"
+}
+
 allowed() {
 	local p
 	for p in "${allow[@]}"; do
@@ -147,11 +184,11 @@ allowed() {
 need_keytool=0
 while IFS= read -r -d '' ks; do
 	allowed "${ks#"$root"}" && continue
-	[ "$(tr -d '\000' <"$ks" | wc -c)" -ne "$(wc -c <"$ks")" ] && need_keytool=1 && break
+	if is_binary "$ks"; then need_keytool=1; break; fi
 done < <(find "$root" -type f -name cacerts -print0)
 if [ "$need_keytool" = 1 ] && ! command -v keytool >/dev/null; then
 	echo "image.sh: the image has a Java keystore; install keytool (a JDK) on the host" >&2
-	exit 2
+	exit 3
 fi
 need_certutil=0
 while IFS= read -r -d '' db; do
@@ -159,7 +196,7 @@ while IFS= read -r -d '' db; do
 done < <(find "$root" -type f \( -name cert9.db -o -name cert8.db \) -print0)
 if [ "$need_certutil" = 1 ] && ! command -v certutil >/dev/null; then
 	echo "image.sh: the image has an NSS database; install certutil (libnss3-tools) on the host" >&2
-	exit 2
+	exit 4
 fi
 
 # Every regular file with a PEM certificate or a probe line. Links are left
@@ -192,7 +229,10 @@ while read -r fp kind file _; do
 	[ -n "${control:-}" ] || [ "$kind" != root ] || control=$CERTS/$file
 done <"$LIST"
 verify_flags=()
-for flags in "-no-CApath -no-CAstore" "-no-CApath"; do
+# -no_check_time: a listed certificate must not verify even after it expires
+# (Comodo AAA expires at the end of 2028), and the control root must keep
+# verifying, or the check would stop working on that date.
+for flags in "-no_check_time -no-CApath -no-CAstore" "-no_check_time -no-CApath"; do
 	read -r -a try <<<"$flags"
 	if openssl verify "${try[@]}" -CAfile "$control" "$control" >/dev/null 2>&1; then
 		verify_flags=("${try[@]}")
@@ -216,7 +256,7 @@ while IFS= read -r f; do
 	# program is built from it. Keep this list the same as the module's.
 	is_src=0
 	case $path in *.go | *.c | *.h | *.cc | *.cpp | *.java | *.rs | *.js | *.mjs | *.cjs | *.ts | *.rb | *.py) is_src=1 ;; esac
-	if [ "$is_src" = 1 ] || [ "$(tr -d '\000' <"$f" | wc -c)" -ne "$(wc -c <"$f")" ]; then
+	if [ "$is_src" = 1 ] || is_binary "$f"; then
 		if grep -qaF -f "$work/probes" "$f"; then
 			binaries=$((binaries + 1))
 			if [ "$strict_binaries" = 1 ]; then
@@ -238,7 +278,6 @@ while IFS= read -r f; do
 	for pem in "$dir"/*.pem; do
 		[ -e "$pem" ] || continue
 		der=$(openssl x509 -in "$pem" -outform der 2>/dev/null | sha256sum | cut -c1-64) || continue
-		[ "$der" = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ] && continue # openssl could not read it
 		ncerts=$((ncerts + 1))
 		cat "$pem" >>"$dir/bundle"
 		[ -n "${listed[$der]:-}" ] || continue
@@ -296,16 +335,19 @@ fi
 # Java. A JDK's own keystore (lib/security/cacerts) needs the JDK's
 # blocked.certs too; a keystore that only p11-kit extracts for a JDK that
 # is not in the image needs none.
-jdk_keystore=0
 find "$root" -type f -name cacerts -print0 2>/dev/null >"$work/keystores" || true
 if [ -s "$work/keystores" ]; then
-	command -v keytool >/dev/null || { echo "image.sh: the image has a Java keystore; install keytool (a JDK) on the host" >&2; exit 2; }
 	while IFS= read -r -d '' ks; do
 		path=${ks#"$root"}
 		allowed "$path" && continue
 		# A PEM file named cacerts (some distributions) is checked above.
-		[ "$(tr -d '\000' <"$ks" | wc -c)" -ne "$(wc -c <"$ks")" ] || continue
-		case $path in */lib/security/cacerts) jdk_keystore=1 ;; esac
+		is_binary "$ks" || continue
+		# Every JDK needs its own blocked.certs: one JDK's file does not
+		# protect another.
+		case $path in */lib/security/cacerts)
+			[ -f "${ks%/cacerts}/blocked.certs" ] || bad "$path: a JDK keystore with no blocked.certs beside it"
+			;;
+		esac
 		if ! out=$(keytool -list -keystore "$ks" -storepass changeit 2>&1); then
 			bad "$path: keytool cannot read it: $out"
 			continue
@@ -317,7 +359,6 @@ if [ -s "$work/keystores" ]; then
 		echo "$path: checked"
 	done <"$work/keystores"
 	find "$root" -type f -name blocked.certs -path '*/lib/security/*' -print0 >"$work/blocked" 2>/dev/null || true
-	[ -s "$work/blocked" ] || [ "$jdk_keystore" = 0 ] || bad "a Java keystore is in the image in a JDK but no JDK blocked.certs blocks the listed certificates"
 	while IFS= read -r -d '' bc; do
 		for fp in "${!listed[@]}"; do
 			grep -qxi "$fp" "$bc" || bad "${bc#"$root"}: does not block ${listed[$fp]#* }"
@@ -329,7 +370,6 @@ fi
 # NSS.
 find "$root" -type f \( -name cert9.db -o -name cert8.db \) -print0 2>/dev/null >"$work/nss" || true
 if [ -s "$work/nss" ]; then
-	command -v certutil >/dev/null || { echo "image.sh: the image has an NSS database; install certutil (libnss3-tools) on the host" >&2; exit 2; }
 	while IFS= read -r -d '' db; do
 		d=$(dirname "$db")
 		path=${d#"$root"}
@@ -394,7 +434,7 @@ while IFS= read -r exe; do
 		cf=$(envval SSL_CERT_FILE)
 		case " $(envval NODE_OPTIONS) " in
 		*" --use-openssl-ca "*)
-			if [ -n "$cf" ] && [ -f "$root$cf" ]; then
+			if [ -n "$cf" ] && in_root "$cf" >/dev/null; then
 				echo "$path: NODE_OPTIONS=--use-openssl-ca, SSL_CERT_FILE=$cf"
 			else
 				bad "$path: --use-openssl-ca without SSL_CERT_FILE set to the system bundle: an official Node binary then trusts no root"
@@ -408,7 +448,7 @@ while IFS= read -r exe; do
 		# is set, and uvx installs a fresh certifi when it runs, which no
 		# build step can clean, so requests must read the bundle too.
 		cf=$(envval SSL_CERT_FILE)
-		if [ "$(envval UV_NATIVE_TLS)" != 1 ] && { [ -z "$cf" ] || [ ! -f "$root$cf" ]; }; then
+		if [ "$(envval UV_NATIVE_TLS)" != 1 ] && { [ -z "$cf" ] || ! in_root "$cf" >/dev/null; }; then
 			bad "$path: uv uses its built-in root list; set ENV SSL_CERT_FILE to the system bundle"
 		fi
 		[ -n "$(envval REQUESTS_CA_BUNDLE)" ] || bad "$path: a certifi that uv installs at run time is not hardened; set ENV REQUESTS_CA_BUNDLE (and SSL_CERT_FILE) to the system bundle"
@@ -435,7 +475,7 @@ if command -v python3 >/dev/null; then
 		echo
 	done >"$work/spki"
 	cat >"$work/der.py" <<'PY'
-import sys
+import mmap, sys
 keys = {}
 for line in open(sys.argv[1]):
     name, hexkey = line.split()
@@ -443,15 +483,19 @@ for line in open(sys.argv[1]):
 for path in open(sys.argv[2], "rb").read().split(b"\0"):
     if not path:
         continue
+    # mmap, not read(): a file of several GB (a model, a data set) must not
+    # be loaded into memory.
     try:
         with open(path, "rb") as f:
-            data = f.read()
-    except OSError as e:
+            if f.seek(0, 2) == 0:
+                continue
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                if data.find(b"\0") < 0:
+                    continue
+                hits = sorted({n for k, ns in keys.items() if data.find(k) >= 0 for n in ns})
+    except (OSError, ValueError) as e:
         print("ERROR", path.decode(errors="replace"), e)
         continue
-    if b"\0" not in data:
-        continue
-    hits = sorted({n for k, ns in keys.items() if k in data for n in ns})
     if hits:
         print(path.decode(errors="replace"), " ".join(hits))
 PY
@@ -464,6 +508,9 @@ PY
 	while read -r f hits; do
 		path=${f#"$root"}
 		allowed "$path" && continue
+		# An NSS database holds each listed certificate on purpose, with
+		# trust p,p,p: the NSS check above proves that.
+		case $path in */cert9.db | */cert8.db) continue ;; esac
 		binaries=$((binaries + 1))
 		if [ "$strict_binaries" = 1 ]; then
 			bad "$path: a binary that holds the key of $hits"
