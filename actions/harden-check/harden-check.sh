@@ -47,6 +47,21 @@ platforms=()
 while IFS= read -r p; do platforms+=("$p"); done < <(words "${HC_PLATFORMS:-}")
 [ "${#dockerfiles[@]}" -gt 0 ] || [ "${#image_lines[@]}" -gt 0 ] || die "set dockerfiles, images or both"
 
+# Check every input before any work, so a typo fails at once.
+[[ ${HC_MIN_ROOTS:-100} =~ ^[0-9]+$ ]] || die "min-roots must be a whole number, not '${HC_MIN_ROOTS}'"
+case ${HC_STRICT_BINARIES:-false} in true | false) ;; *) die "strict-binaries must be true or false, not '${HC_STRICT_BINARIES}'" ;; esac
+case ${HC_INSTALL_TOOLS:-true} in true | false) ;; *) die "install-tools must be true or false, not '${HC_INSTALL_TOOLS}'" ;; esac
+for line in "${image_lines[@]}"; do
+	read -r _ _ extra <<<"$line"
+	[ -z "${extra:-}" ] || die "image line '$line': want REF or REF PLATFORM"
+done
+check_args=(--min-roots "${HC_MIN_ROOTS:-100}")
+[ "${HC_STRICT_BINARIES:-false}" = false ] || check_args+=(--strict-binaries)
+while IFS= read -r a; do
+	a=$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' <<<"$a")
+	[ -n "$a" ] && check_args+=(--allow "$a")
+done <<<"${HC_ALLOW:-}"
+
 # The Dockerfiles' kits: the build-harden stages they pin. The image check
 # must read the policy of the kit that hardened the image, so a Dockerfile
 # that pins another kit than the one checked fails.
@@ -56,6 +71,8 @@ for f in "${dockerfiles[@]}"; do
 	if [ -d "$f" ]; then set -- "$f"/Dockerfile*; else set -- "$f"; fi
 	for g in "$@"; do
 		[ -f "$g" ] || continue
+		# The same files dockerfile.sh checks: not its notes or ignore file.
+		case $g in *.dockerignore | *.md) continue ;; esac
 		while IFS= read -r k; do df_kits+=("$k"); done < <(
 			grep -v '^[[:space:]]*#' "$g" |
 				sed -nE 's/^[[:space:]]*FROM[[:space:]]+(--platform=[^[:space:]]+[[:space:]]+)?(luthersystems\/build-harden:[^[:space:]]+)[[:space:]]+AS[[:space:]].*/\2/Ip'
@@ -81,7 +98,7 @@ echo "kit: $kit"
 # needs no command that runs; it is never started.
 work=$(mktemp -d -p "$tmp" harden-check.XXXXXX)
 kcid=
-# shellcheck disable=SC2329 # called by the EXIT trap
+# shellcheck disable=SC2317,SC2329 # called by the EXIT trap
 cleanup() {
 	[ -z "$kcid" ] || docker rm -f "$kcid" >/dev/null 2>&1 || true
 	rm -rf "$work"
@@ -105,19 +122,6 @@ if [ "${#dockerfiles[@]}" -gt 0 ]; then
 	fi
 fi
 
-args=(--policy "$work/policy" --min-roots "${HC_MIN_ROOTS:-100}")
-case ${HC_STRICT_BINARIES:-false} in
-true) args+=(--strict-binaries) ;;
-false) ;;
-*) die "strict-binaries must be true or false, not '${HC_STRICT_BINARIES}'" ;;
-esac
-[[ ${HC_MIN_ROOTS:-100} =~ ^[0-9]+$ ]] || die "min-roots must be a whole number, not '${HC_MIN_ROOTS}'"
-while IFS= read -r a; do
-	a=$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' <<<"$a")
-	[ -n "$a" ] && args+=(--allow "$a")
-done <<<"${HC_ALLOW:-}"
-case ${HC_INSTALL_TOOLS:-true} in true | false) ;; *) die "install-tools must be true or false" ;; esac
-
 # apt_install PKG...: install host tools, only on a host that has apt.
 apt_install() {
 	[ "${HC_INSTALL_TOOLS:-true}" = true ] || return 1
@@ -139,7 +143,7 @@ check_image() {
 	log=$work/image.log
 	for _ in 1 2 3; do
 		rc=0
-		bash "$here/check/image.sh" "${args[@]}" ${platform:+--platform "$platform"} "$ref" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
+		bash "$here/check/image.sh" --policy "$work/policy" "${check_args[@]}" ${platform:+--platform "$platform"} "$ref" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
 		[ "$rc" -eq 2 ] || return "$rc"
 		need=()
 		grep -q 'install keytool' "$log" && need+=(default-jre-headless)
@@ -151,8 +155,7 @@ check_image() {
 }
 
 for line in "${image_lines[@]}"; do
-	read -r ref lplat extra <<<"$line"
-	[ -z "${extra:-}" ] || die "image line '$line': want REF or REF PLATFORM"
+	read -r ref lplat <<<"$line"
 	if [ -n "${lplat:-}" ]; then
 		plats=("$lplat")
 	elif [ "${#platforms[@]}" -gt 0 ]; then
@@ -162,8 +165,16 @@ for line in "${image_lines[@]}"; do
 	fi
 	for p in "${plats[@]}"; do
 		echo "::group::image check: $ref${p:+ ($p)}"
+		# An image the daemon does not hold is pulled by the check. Remove it
+		# after, so the next platform pulls its own copy: the classic image
+		# store keeps one platform per digest and refuses a second pull of
+		# the same digest ("cannot overwrite digest"). An image built into
+		# the daemon is the caller's and is kept.
+		pulled=0
+		docker image inspect "$ref" >/dev/null 2>&1 || pulled=1
 		rc=0
 		check_image "$ref" "$p" || rc=$?
+		[ "$pulled" = 0 ] || docker image rm -f "$ref" >/dev/null 2>&1 || true
 		echo "::endgroup::"
 		case $rc in
 		0) echo "- \`$ref\`${p:+ ($p)}: ok" >>"$summary" ;;

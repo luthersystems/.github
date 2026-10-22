@@ -29,7 +29,7 @@ expect() {
 	rm -f "$log"
 }
 
-expect "an image that trusts the listed CAs" 1 '^FAIL: /etc/ssl/cert.pem: holds ' \
+expect "an image that trusts the listed CAs" 1 '^FAIL: /etc/ssl/certs/ca-certificates.crt: holds ' \
 	HC_KIT="$kit" HC_IMAGES="alpine:3.22@sha256:822614ea121e1d40a33655081af10ef85f0aa2ab9e61f649ceaf0c651822433c"
 
 expect "headless-shell with no NSS database (buildenv#165)" 1 'headless-shell: Chrome uses its built-in roots' \

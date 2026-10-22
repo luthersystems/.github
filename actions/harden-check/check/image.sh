@@ -70,7 +70,10 @@ IMAGE=${1:?usage: image.sh --policy DIR [options] IMAGE}
 [ -n "$policy" ] || { echo "image.sh: --policy DIR is required" >&2; exit 2; }
 LIST=$policy/ca-distrust.list
 CERTS=$policy/ca-distrust
-[ -f "$LIST" ] && [ -d "$CERTS" ] || { echo "image.sh: $policy has no ca-distrust.list and ca-distrust/" >&2; exit 2; }
+if [ ! -f "$LIST" ] || [ ! -d "$CERTS" ]; then
+	echo "image.sh: $policy has no ca-distrust.list and ca-distrust/" >&2
+	exit 2
+fi
 
 for tool in docker openssl awk sha256sum tar; do
 	command -v "$tool" >/dev/null || { echo "image.sh: needs $tool" >&2; exit 2; }
@@ -112,7 +115,10 @@ done <"$LIST"
 echo "policy: ${#listed[@]} listed certificate(s)"
 
 # Export the file system. tar skips device files it cannot create.
-cid=$(docker create ${platform:+--platform "$platform"} "$IMAGE" /nonexistent)
+# Exit 2, not docker's own code: a pull error is a check that could not run,
+# not an image that fails the policy.
+cid=$(docker create ${platform:+--platform "$platform"} "$IMAGE" /nonexistent) ||
+	{ echo "image.sh: cannot create a container of $IMAGE${platform:+ ($platform)}" >&2; exit 2; }
 # A failed export must not pass as a clean image: any tar error fails.
 if ! docker export "$cid" | tar -x -C "$root" --no-same-owner --no-same-permissions --exclude='dev/*' 2>"$work/tar.err"; then
 	echo "image.sh: could not export $IMAGE:" >&2
@@ -124,6 +130,7 @@ fi
 # (/etc/shadow): make every file readable, so no file is skipped.
 chmod -R u+rwX "$root"
 
+
 allowed() {
 	local p
 	for p in "${allow[@]}"; do
@@ -132,6 +139,28 @@ allowed() {
 	done
 	return 1
 }
+
+# Host tools that only some images need. Ask for them now, before the scans,
+# so a caller that installs the tool and runs again does not pay for a full
+# scan first. The same files count as in the checks below: an allowed path
+# and a PEM file named cacerts need no tool.
+need_keytool=0
+while IFS= read -r -d '' ks; do
+	allowed "${ks#"$root"}" && continue
+	[ "$(tr -d '\000' <"$ks" | wc -c)" -ne "$(wc -c <"$ks")" ] && need_keytool=1 && break
+done < <(find "$root" -type f -name cacerts -print0)
+if [ "$need_keytool" = 1 ] && ! command -v keytool >/dev/null; then
+	echo "image.sh: the image has a Java keystore; install keytool (a JDK) on the host" >&2
+	exit 2
+fi
+need_certutil=0
+while IFS= read -r -d '' db; do
+	allowed "$(dirname "${db#"$root"}")" || { need_certutil=1; break; }
+done < <(find "$root" -type f \( -name cert9.db -o -name cert8.db \) -print0)
+if [ "$need_certutil" = 1 ] && ! command -v certutil >/dev/null; then
+	echo "image.sh: the image has an NSS database; install certutil (libnss3-tools) on the host" >&2
+	exit 2
+fi
 
 # Every regular file with a PEM certificate or a probe line. Links are left
 # out: they point at a path in the image, which is scanned as itself.
@@ -344,7 +373,9 @@ fi
 # Clients with their own root list. A clean system store does nothing for a
 # client that does not read it, so the image's environment must point each
 # one at the store (lessons of connectorhub#262 and hyphae#71/#72).
-docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$IMAGE" >"$work/env" 2>/dev/null ||
+# Read it from the container made above, not the image name: on a
+# multi-platform image the name can resolve to another platform's config.
+docker container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$cid" >"$work/env" 2>/dev/null ||
 	{ echo "image.sh: cannot read the environment of $IMAGE" >&2; exit 2; }
 envval() { sed -n "s/^$1=//p" "$work/env" | tail -1; }
 find "$root" -type f -perm -u+x \( -name node -o -name uv -o -name uvx -o -name chrome -o -name chromium -o -name chromium-browser -o -name headless_shell -o -name headless-shell \) -print >"$work/clients"

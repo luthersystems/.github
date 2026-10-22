@@ -27,14 +27,18 @@ jobs:
         run: |
           set -euo pipefail
           v=v0.10.0
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/$v/shellcheck-$v.linux.x86_64.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
+          t=$RUNNER_TEMP/shellcheck.tar.xz
+          curl -fsSL -o "$t" "https://github.com/koalaman/shellcheck/releases/download/$v/shellcheck-$v.linux.x86_64.tar.xz"
+          # The checksum of the reviewed release: a changed tarball fails.
+          echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  $t" | sha256sum -c -
+          tar -xJ -C "$RUNNER_TEMP" -f "$t"
           echo "$RUNNER_TEMP/shellcheck-$v" >>"$GITHUB_PATH"
       - name: Run actionlint
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           "$(go env GOPATH)/bin/actionlint" -color
       - name: Run shellcheck on the action scripts
-        run: shellcheck -x actions/*/*.sh actions/*/check/*.sh
+        run: shellcheck -x actions/*/*.sh actions/*/check/*.sh tests/*/*.sh
 
   # A passing case runs the action as a caller does (uses: ./actions/...).
   # A failing case runs the action's script with the same inputs and asserts
