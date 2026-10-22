@@ -58,7 +58,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: "Version to tag (vMAJOR.MINOR.PATCH). Empty = auto-bump patch of the latest tag."
+        description: "Version to tag (vMAJOR.MINOR.PATCH). Empty = auto-bump the patch of the latest tag in main's major line."
         type: string
         required: false
         default: ""
@@ -205,6 +205,7 @@ jobs:
       - name: Compute and validate version
         id: ver
         env:
+          GH_TOKEN: ${{ github.token }}
           REQUESTED: ${{ inputs.version }}
           MAJORS: ${{ inputs.majors }}
         run: |
@@ -270,6 +271,14 @@ jobs:
           fi
           if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
             echo "error: tag $version already exists" >&2
+            exit 1
+          fi
+          # The checkout's tags date from before the CI wait, which can last
+          # 30 minutes, so ask GitHub too. gh release create would otherwise
+          # publish onto a tag pushed in that window, whatever it points at.
+          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$version" --jq '.[].ref')
+          if grep -qxF "refs/tags/$version" <<<"$refs"; then
+            echo "error: tag $version already exists on GitHub" >&2
             exit 1
           fi
           echo "computed version: $version (latest existing: ${latest:-none})"
