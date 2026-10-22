@@ -52,8 +52,9 @@ which can only make a gate stricter.
 The owner chose substrate's rule (design question 2). A marker is one of the
 five upper-case words, standing alone. It passes when:
 
-- it is followed at once by an issue in parentheses: `TODO(#816)` or
-  `FIXME(luthersystems/elps#847)`; `#816` is an issue of the repo itself, or
+- it is followed at once by an issue in parentheses, `MARKER(#816)` or
+  `MARKER(luthersystems/elps#850)`, where MARKER is the word; `#816` is an
+  issue of the repo itself, or
 - a row in the allowlist covers the line, or
 - it is Go's `context.TODO()`.
 

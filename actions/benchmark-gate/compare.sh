@@ -98,6 +98,21 @@ fi
 # Both arms come from benchmark-run in this job. An empty base arm is not a
 # cache miss: the base checkout or its run failed, and a report of the PR
 # numbers only would hide that.
+# A missing file (not an empty one) means the run step stopped before its
+# filter ran: a build, prepare or test failure in either arm. That is the
+# run's failure, not the base arm's, so the comment must not blame the base.
+if [ ! -e bench-baseline.txt ]; then
+  echo "::error::The benchmark run did not finish; see the benchmark-run step's log."
+  {
+    echo '## Benchmark run failed -- no comparison'
+    echo ''
+    echo 'The benchmark run stopped before it wrote its results: a build,'
+    echo '`prepare` or test failure in one of the arms. Open the job log of the'
+    echo 'benchmark-run step for the cause.'
+  } >"$COMMENT_FILE"
+  emit 2
+  exit 0
+fi
 if [ ! -s bench-baseline.txt ]; then
   echo "::error::bench-baseline.txt is empty or missing -- the base arm did not produce results."
   {
@@ -108,6 +123,28 @@ if [ ! -s bench-baseline.txt ]; then
     echo ''
     echo '```'
     cat bench-current.txt 2>/dev/null || echo '(no PR-arm output either)'
+    echo '```'
+  } >"$COMMENT_FILE"
+  emit 2
+  exit 0
+fi
+
+# The PR arm's sample count, again: benchmark-run checked it and failed the
+# job, but when this action runs after that failure the comment must name the
+# rows that lost samples, or it reads as a normal comparison.
+samples_rc=0
+min_samples=6
+case "$count" in '' | *[!0-9]*) ;; *) min_samples="$count" ;; esac
+BENCH_MIN_SAMPLES="$min_samples" bash "${here}/../benchmark-run/samples-check.sh" \
+  bench-current.txt "${BENCH_ARMS_PR_RAW:-bench-pr-raw.txt}" >samples-check.txt 2>&1 || samples_rc=$?
+if [ "$samples_rc" -ne 0 ]; then
+  cat samples-check.txt
+  echo "::error::A benchmark in the PR arm lost samples; see the report above."
+  {
+    echo '## Benchmark samples are missing -- no comparison was made'
+    echo ''
+    echo '```'
+    cat samples-check.txt
     echo '```'
   } >"$COMMENT_FILE"
   emit 2

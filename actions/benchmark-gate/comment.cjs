@@ -52,7 +52,12 @@ function truncateBody(body, runUrl) {
   const fold = body.indexOf(FOLD);
   let head = fold === -1 ? body : body.slice(0, fold);
   if (head.length + note.length > BODY_LIMIT) {
-    head = head.slice(0, BODY_LIMIT - note.length);
+    head = head.slice(0, BODY_LIMIT - note.length - 5);
+    // A cut inside a code block leaves it open, and Markdown then renders
+    // the note as code. An odd number of fences means one is open.
+    if (((head.match(/^```/gm) || []).length % 2) === 1) {
+      head += '\n```';
+    }
   }
   return head + note;
 }

@@ -22,7 +22,7 @@ samples="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/samples-check.sh"
 cd "$work"
 
 keep() {
-  grep -E '^(goos|goarch|pkg|cpu):|^Benchmark[^ ]+[[:space:]]+[0-9]+[[:space:]]' "$1" >"$2" || true
+  grep -E '^(goos|goarch|pkg|cpu):|^Benchmark[^[:space:]]+[[:space:]]+[0-9]+[[:space:]]' "$1" >"$2" || true
 }
 keep bench-base-raw.txt bench-baseline.txt
 keep bench-pr-raw.txt bench-current.txt

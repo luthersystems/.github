@@ -123,8 +123,11 @@ done
 # model from CPUID on x86 only), so on ARM this check cannot run, and the
 # one-job design is what prevents the failure. It says "skipping", not
 # "match": a check that did not run must not look like one that passed.
-bcpu="$(headers cpu "$base" | paste -sd' | ' -)"
-pcpu="$(headers cpu "$pr" | paste -sd' | ' -)"
+# Joined with " | " by awk: paste -d cycles single characters, it cannot
+# join with a string.
+join_bar() { awk 'NR > 1 { printf " | " } { printf "%s", $0 }'; }
+bcpu="$(headers cpu "$base" | join_bar)"
+pcpu="$(headers cpu "$pr" | join_bar)"
 if [ -n "$bcpu" ] && [ -n "$pcpu" ]; then
   if [ "$bcpu" != "$pcpu" ]; then
     problem "cpu: base=[${bcpu}] pr=[${pcpu}] -- benchstat keys its configuration on this header, so the arms will not pair. Measure both arms in ONE job on ONE runner."

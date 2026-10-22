@@ -57,11 +57,11 @@ on:
         type: string
         required: false
         default: '(^docs/|\.md$)'
-      go-version-file:
-        description: The go.mod, relative to the repo root, whose Go builds both arms (read from the PR arm).
+      directory:
+        description: The Go module directory, relative to the repo root. Its go.mod sets the Go that builds both arms (read from the PR arm).
         type: string
         required: false
-        default: go.mod
+        default: "."
       go-cache:
         description: Restore the setup-go module cache. Turn off on self-hosted runners that keep a module cache of their own.
         type: boolean
@@ -193,8 +193,14 @@ jobs:
           # Fail open to "measure": an error here must never skip the gate.
           skip=false
           if [ -n "$SKIP_PATHS" ] && files="$(git diff --name-only HEAD^1 HEAD 2>/dev/null)" && [ -n "$files" ]; then
-            if ! grep -qvE "$SKIP_PATHS" <<<"$files"; then
+            # grep -v exits 1 only when every file matched. Exit 2 (a bad
+            # regex) must measure, not skip.
+            rc=0
+            grep -qvE "$SKIP_PATHS" <<<"$files" || rc=$?
+            if [ "$rc" -eq 1 ]; then
               skip=true
+            elif [ "$rc" -ne 0 ]; then
+              echo "::warning::skip-paths is not a valid extended regex; measuring."
             fi
           fi
           echo "skip=$skip" >>"$GITHUB_OUTPUT"
@@ -234,11 +240,12 @@ jobs:
       # the difference.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: pr/${{ inputs.go-version-file }}
+          go-version-file: pr/${{ inputs.directory }}/go.mod
           cache: ${{ inputs.go-cache }}
           cache-dependency-path: pr/**/go.sum
       - uses: luthersystems/.github/actions/benchmark-run@v1
         with:
+          directory: ${{ inputs.directory }}
           packages: ${{ inputs.packages }}
           bench: ${{ inputs.bench }}
           skip: ${{ inputs.skip }}

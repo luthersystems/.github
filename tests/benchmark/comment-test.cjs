@@ -56,6 +56,19 @@ function truncation() {
   assert.match(cut2, /^## Benchmark comparison/);
   assert.match(cut2, /This comment was truncated/);
   ok('a body with no collapsed section is still cut to fit, with the note');
+
+  // The same, inside a code block: the cut must close the fence, or the
+  // note renders as code.
+  let fenced = '## Benchmark comparison (base vs PR)\n\n### Reviewed waivers\n\n```\n';
+  for (let i = 0; i < 1400; i++) {
+    fenced += `  WAIVED      example.com/pkg B/op BenchmarkRowNumber${String(i).padStart(5, '0')}-2 delta=+12.45% accepted: ceiling 14%\n`;
+  }
+  fenced += '```\n';
+  const cut3 = mod.truncateBody(fenced, RUN);
+  assert.ok(cut3.length <= mod.BODY_LIMIT, `cut body is ${cut3.length}`);
+  assert.equal((cut3.match(/^```/gm) || []).length % 2, 0, 'every fence is closed');
+  assert.ok(cut3.indexOf('This comment was truncated') > cut3.lastIndexOf('```'), 'the note is after the last fence');
+  ok('a cut inside a code block closes the block before the note');
 }
 
 function fakeGithub(comments, { failPost = false, failList = false } = {}) {

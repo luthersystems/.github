@@ -228,6 +228,15 @@ run_arms() { # <ws> [VAR=value...]; runs run-arms.sh with the fake go
 }
 
 ws="$(new_ws)"
+mkdir -p "$ws/base/sub/mod" "$ws/pr/sub/mod"
+touch "$ws/base/sub/mod/go.mod" "$ws/pr/sub/mod/go.mod"
+expect 0 "run: directory runs go test in the module directory" "round 3/3" -- run_arms "$ws" BENCH_DIRECTORY=sub/mod FAKE_GO_RECORD=PWD
+expect 0 "run: ... in both arms" "" -- bash -c 'grep -c "PWD=$1/base/sub/mod " "$1/go.log" | grep -qx 3 && grep -c "PWD=$1/pr/sub/mod " "$1/go.log" | grep -qx 3' _ "$ws"
+ws="$(new_ws)"
+expect 2 "run: a directory with no go.mod fails, naming the input" "no go.mod in base/nope. Set the directory input" -- run_arms "$ws" BENCH_DIRECTORY=nope
+expect 2 "run: a directory with .. fails" "directory must be relative" -- run_arms "$ws" BENCH_DIRECTORY=../x
+
+ws="$(new_ws)"
 expect 0 "run: three interleaved rounds pass" "round 3/3" -- run_arms "$ws"
 order="$(sed -n 's/^arm=\([a-z]*\).*/\1/p' "$ws/go.log" | paste -sd' ' -)"
 if [ "$order" = "base pr base pr base pr" ]; then
@@ -347,14 +356,17 @@ compare_case() {
   local d="$1" rc cf
   shift
   mkdir -p "$d/pr/.github/quality"
-  [ -f "$d/bench-baseline.txt" ] || cp "$at/base.txt" "$d/bench-baseline.txt"
-  [ -f "$d/bench-current.txt" ] || cp "$at/pr.txt" "$d/bench-current.txt"
-  [ -f "$d/bench-base-raw.txt" ] || cp "$d/bench-baseline.txt" "$d/bench-base-raw.txt"
-  [ -f "$d/bench-pr-raw.txt" ] || cp "$d/bench-current.txt" "$d/bench-pr-raw.txt"
+  # A .no-results file stands for a run that stopped before its filter.
+  if [ ! -e "$d/.no-results" ]; then
+    [ -f "$d/bench-baseline.txt" ] || cp "$at/base.txt" "$d/bench-baseline.txt"
+    [ -f "$d/bench-current.txt" ] || cp "$at/pr.txt" "$d/bench-current.txt"
+    [ -f "$d/bench-base-raw.txt" ] || cp "$d/bench-baseline.txt" "$d/bench-base-raw.txt"
+    [ -f "$d/bench-pr-raw.txt" ] || cp "$d/bench-current.txt" "$d/bench-pr-raw.txt"
+  fi
   : >"$d/gh-output.txt"
   rc=0
   env PATH="$fakes:$PATH" GITHUB_WORKSPACE="$d" GITHUB_OUTPUT="$d/gh-output.txt" \
-    BENCH_COUNT=10 WAIVERS_PATH=.github/quality/benchstat-waivers.txt FAKE_GATE_ARGS="$d/gate-args.txt" \
+    BENCH_COUNT=6 WAIVERS_PATH=.github/quality/benchstat-waivers.txt FAKE_GATE_ARGS="$d/gate-args.txt" \
     "$@" bash "$gate_dir/compare.sh" || rc=$?
   echo "__EXIT__ $rc"
   echo "__GITHUB_OUTPUT__"
@@ -403,7 +415,7 @@ expect 0 "compare: waivers go above the fold" "  WAIVED      pkg B/op Encode-2" 
 expect 0 "compare: the waiver section names the configured path" 'Declared in `\.github/quality/benchstat-waivers\.txt`' -- echo "$above"
 expect 0 "compare: the gate report reaches the body" "stub gate report" -- body_of "$d/run.txt"
 expect 0 "compare: the benchstat table reaches the body" "stub benchstat table" -- body_of "$d/run.txt"
-expect 0 "compare: count reaches the footer" "n=10 each\._$" -- body_of "$d/run.txt"
+expect 0 "compare: count reaches the footer" "n=6 each\._$" -- body_of "$d/run.txt"
 expect_not "compare: no flag is passed when no threshold is set" "-threshold|-alloc-threshold|-variance-ceiling|-alpha" -- \
   cat "$d/gate-args.txt"
 expect 0 "compare: the waivers go to -waivers-default, from pr/" \
@@ -445,6 +457,17 @@ compare_case "$d" >"$d/run.txt" 2>&1
 expect 0 "compare: an empty base arm reports gate_status=2" "" -- grep -qx "gate_status=2" "$d/run.txt"
 expect 0 "compare: ... and says so in the log" "::error::bench-baseline.txt is empty" -- cat "$d/run.txt"
 expect 0 "compare: ... and in the body" "## Benchmark results \(base arm FAILED" -- body_of "$d/run.txt"
+d="$(cdir)"
+touch "$d/.no-results"
+compare_case "$d" >"$d/run.txt" 2>&1
+expect 0 "compare: a run that wrote no results reports gate_status=2" "" -- grep -qx "gate_status=2" "$d/run.txt"
+expect 0 "compare: ... and calls it a failed run" "## Benchmark run failed -- no comparison" -- body_of "$d/run.txt"
+expect_not "compare: ... and does not blame the base arm" "base arm FAILED" -- body_of "$d/run.txt"
+d="$(cdir)"
+awk '/^BenchmarkEnvGet/ && !done { done = 1; next } { print }' "$at/pr.txt" >"$d/bench-current.txt"
+compare_case "$d" >"$d/run.txt" 2>&1
+expect 0 "compare: a PR arm short of samples reports gate_status=2" "" -- grep -qx "gate_status=2" "$d/run.txt"
+expect 0 "compare: ... and names the benchmark in the body" "SHORT +BenchmarkEnvGet" -- body_of "$d/run.txt"
 d="$(cdir)"
 cp "$at/procs2.txt" "$d/bench-baseline.txt"
 compare_case "$d" >"$d/run.txt" 2>&1

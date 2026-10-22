@@ -79,7 +79,7 @@ reports.
 | `runs-on` | `ubuntu-24.04-arm` | a label or a JSON array of labels; keep one fixed runner class |
 | `timeout-minutes` | `45` | the benchmarks take longer |
 | `skip-paths` | `(^docs/\|\.md$)` | other paths that cannot change a benchmark |
-| `go-version-file` | `go.mod` | the module is not at the root |
+| `directory` | `.` | the module is not at the repo root; its `go.mod` also sets the Go |
 | `go-cache` | `true` | a self-hosted runner keeps its own module cache |
 | `lfs` | `false` | the benchmarks read Git LFS files |
 | `packages`, `bench`, `skip`, `benchtime`, `timeout` | `./...`, `.`, none, `100ms`, `15m` | to choose what is measured |

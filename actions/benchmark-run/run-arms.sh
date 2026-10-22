@@ -17,6 +17,8 @@
 # Environment (the action sets each one from its input of the same meaning):
 #   GITHUB_WORKSPACE      holds the two checkouts, base/ and pr/; the output
 #                         files are written here
+#   BENCH_DIRECTORY       the module directory in each arm, relative to the
+#                         arm's root (.); go test runs there
 #   BENCH_PACKAGES        packages, space separated (./...)
 #   BENCH_REGEX           -bench regexp (.)
 #   BENCH_SKIP            -skip regexp; empty means no -skip
@@ -51,6 +53,14 @@ case "$procs" in '' | *[!0-9]* | 0) die "gomaxprocs must be a positive integer, 
 case "$allow" in true | false) ;; *) die "allow-build-failures must be true or false, got '${allow}'" ;; esac
 for arm in base pr; do
   [ -d "$work/$arm" ] || die "no $arm/ checkout in $work. The workflow must check out the base commit at base/ and the PR merge commit at pr/."
+done
+
+moddir="${BENCH_DIRECTORY:-.}"
+case "/$moddir/" in */../* | //*) die "directory must be relative to the repo root, with no '..', got '${moddir}'" ;; esac
+# Only for a subdirectory: a wrong one would otherwise fail later with a
+# go test message that does not name the input.
+[ "$moddir" = "." ] || for arm in base pr; do
+  [ -f "$work/$arm/$moddir/go.mod" ] || die "no go.mod in $arm/$moddir. Set the directory input to the module's directory."
 done
 
 read -r -a packages <<<"${BENCH_PACKAGES:-./...}"
@@ -121,7 +131,7 @@ for round in $(seq 1 "$count"); do
   for arm in base pr; do
     arm_env "$work/$arm"
     rc=0
-    (cd "$work/$arm" && env "${arm_pairs[@]}" go "${args[@]}") | tee "$round_out" || rc=$?
+    (cd "$work/$arm/$moddir" && env "${arm_pairs[@]}" go "${args[@]}") | tee "$round_out" || rc=$?
     cat "$round_out" >>"$work/bench-${arm}-raw.txt"
     if [ "$rc" -ne 0 ]; then
       if [ "$allow" = true ] && only_build_failures "$round_out"; then

@@ -30,6 +30,10 @@ description: >-
 # benchmarks that did not build).
 
 inputs:
+  directory:
+    description: The Go module directory, relative to the repo root. go test runs there; prepare runs at the repo root.
+    required: false
+    default: "."
   packages:
     description: Packages to benchmark, space separated.
     required: false
@@ -108,6 +112,7 @@ runs:
     - name: Run benchmarks (both arms, interleaved)
       shell: bash
       env:
+        BENCH_DIRECTORY: ${{ inputs.directory }}
         BENCH_PACKAGES: ${{ inputs.packages }}
         BENCH_REGEX: ${{ inputs.bench }}
         BENCH_SKIP: ${{ inputs.skip }}
