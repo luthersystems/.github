@@ -200,7 +200,9 @@ jobs:
           # v1.2.8 as equal, and bash arithmetic overflows past 64 bits.
           vkey='def key(t):
               return tuple((len(p.lstrip("0")), p.lstrip("0")) for p in t[1:].split("."))'
-          latest=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          # grep exits 1 when no tag matches (a repo's first release), which
+          # pipefail would turn into a silent exit; || true keeps the empty list.
+          latest=$(git tag --list 'v*' | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
             | python3 -Ic "$vkey"$'\nimport sys\ntags=sys.stdin.read().split()\nprint(max(tags, key=key) if tags else "")')
           if [ -n "$REQUESTED" ]; then
             version="$REQUESTED"
