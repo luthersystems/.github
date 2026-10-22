@@ -29,7 +29,7 @@ check and one `result` job to require.
 
 | Job | Runs when | Fails on | Make an exception with |
 |---|---|---|---|
-| `work-markers` | always (input `work-markers`) | a TODO, FIXME, XXX, HACK or BUG that does not name an issue as `MARKER(#N)` or `MARKER(owner/repo#N)`; on a PR, a named issue that is not open | a row in `.github/quality/work-markers.txt`, only for words that are not work |
+| `work-markers` | always (input `work-markers`) | a work marker (one of five upper-case words, listed in `actions/work-markers/work-markers.sh`) that does not name an issue as `MARKER(#N)` or `MARKER(owner/repo#N)`; on a PR, a named issue that is not open | a row in `.github/quality/work-markers.txt`, only for words that are not work |
 | `lint` | the repo has a Go module | a golangci-lint finding, with the repo's own `.golangci.yml` | the repo's `.golangci.yml` exclusions, or `//nolint:<linter> // reason` |
 | `api-break` | a PR, when the repo sets `api-break: true` | a removed or incompatibly changed exported Go symbol (and Lisp symbol, with a surface script) | a row in `.github/quality/api-breaks.txt` |
 | `result` | always | any job above that failed or was cancelled | — |

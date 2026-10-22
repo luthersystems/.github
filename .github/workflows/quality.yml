@@ -19,7 +19,7 @@ name: Quality
 # "quality / result", in every repo, whatever checks apply to it.
 #
 # What it runs (each check's action explains its choices):
-#   work-markers  Every TODO-style marker names an issue as MARKER(#N); on a
+#   work-markers  Every work marker names an issue as MARKER(#N); on a
 #                 PR, every named issue must be open. A file lists only the
 #                 words that are not work (copied source, data).
 #   lint          golangci-lint, one pinned version for every repo, with the
