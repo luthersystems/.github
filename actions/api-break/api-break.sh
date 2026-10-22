@@ -54,7 +54,7 @@ done
 
 tmp="$(mktemp -d)"
 worktree=""
-# shellcheck disable=SC2329 # invoked by the EXIT trap
+# shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap (older shellcheck: SC2317)
 cleanup() {
   if [ -n "$worktree" ]; then
     git -C "$root" worktree remove --force "$worktree" >/dev/null 2>&1 || true
