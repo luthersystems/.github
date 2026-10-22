@@ -1,0 +1,63 @@
+name: govulncheck gate
+description: >-
+  Scan each Go module with govulncheck and fail on a called finding that no
+  live row of the repo's exemptions file covers.
+
+# Why this is an action: twelve repos carried their own copy of the
+# govulncheck scripts, in five versions, and eight installed govulncheck
+# @latest, so the same commit could pass on Monday and fail on Tuesday with
+# no change. One copy, pinned, released with this repo's tags, gives every
+# repo the same scanner and the same rule.
+#
+# Needs: Go on PATH (the caller sets it up from the repo's go.mod, so the
+# stdlib scanned is the one we ship), python3, and access to private modules
+# when the repo has any.
+
+inputs:
+  directories:
+    description: >-
+      Module directories to scan, space separated. Empty: every go.mod
+      outside vendor/, testdata/ and node_modules/.
+    required: false
+    default: ""
+  exemptions:
+    description: >-
+      Exemptions file, relative to the repo root. Each row is
+      `GO-YYYY-N | expires (YYYY-MM-DD) | owner/repo#N | reason`. A missing
+      file means no finding is exempt.
+    required: false
+    default: .github/security/govulncheck-exemptions.txt
+  binary:
+    description: >-
+      true: also build each main package and scan the binary, which finds
+      code reached by reflection. Costs a build, so the workflow sets it on
+      scheduled scans only.
+    required: false
+    default: "false"
+  version:
+    description: govulncheck version (golang.org/x/vuln). Pinned so a release cannot change a result with no change in the repo.
+    required: false
+    default: v1.8.0
+  report:
+    description: File the scan log is appended to, for the drift issue.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install govulncheck
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      # go install checks the module against the Go checksum database, so the
+      # binary is the reviewed release, as a pinned checksum would prove.
+      run: GOTOOLCHAIN=auto go install "golang.org/x/vuln/cmd/govulncheck@${VERSION}"
+    - name: Run govulncheck
+      shell: bash
+      env:
+        DIRS: ${{ inputs.directories }}
+        EXEMPTIONS: ${{ inputs.exemptions }}
+        BINARY: ${{ inputs.binary }}
+        REPORT: ${{ inputs.report }}
+      run: bash "$GITHUB_ACTION_PATH/govulncheck.sh"

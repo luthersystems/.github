@@ -1,0 +1,21 @@
+name: security drift issue
+description: Open, refresh or close the repo's security-drift issue after a scheduled scan.
+
+# Why: see drift.cjs. Needs issues: write.
+
+inputs:
+  results:
+    description: JSON object, check name -> job result.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        RESULTS: ${{ inputs.results }}
+        DRIFT_SCRIPT: ${{ github.action_path }}/drift.cjs
+      with:
+        script: |
+          const run = require(process.env.DRIFT_SCRIPT);
+          await run({ github, context, core });

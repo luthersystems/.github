@@ -1,0 +1,35 @@
+name: security detect
+description: Find what the security workflow should scan in this repo.
+
+# Why a separate step: the workflow skips the Go jobs in a repo with no Go
+# module, and reports them as skipped rather than as a failed setup. A skipped
+# job counts as passed for a required check, so one workflow fits every repo.
+
+inputs:
+  go-directories:
+    description: Module directories to scan, space separated. Empty means detect.
+    required: false
+    default: ""
+outputs:
+  go-directories:
+    description: Module directories, space separated (empty when none).
+    value: ${{ steps.find.outputs.go-directories }}
+  go-version-file:
+    description: The go.mod whose Go version the Go jobs set up (the first module).
+    value: ${{ steps.find.outputs.go-version-file }}
+
+runs:
+  using: composite
+  steps:
+    - id: find
+      shell: bash
+      env:
+        GIVEN: ${{ inputs.go-directories }}
+      run: |
+        set -euo pipefail
+        dirs="${GIVEN:-$("$GITHUB_ACTION_PATH/find-go-modules.sh" | tr '\n' ' ')}"
+        dirs="$(echo "$dirs" | xargs)"
+        echo "go-directories=$dirs" >>"$GITHUB_OUTPUT"
+        first="${dirs%% *}"
+        echo "go-version-file=${first:+$first/go.mod}" >>"$GITHUB_OUTPUT"
+        echo "Go modules: ${dirs:-none}"

@@ -1,0 +1,35 @@
+name: gitleaks
+description: Fail when a commit or file holds a secret (API key, private key, token).
+
+# Why: see gitleaks.sh. Needs Go on PATH to install gitleaks, and a checkout
+# with the history of the scanned range (fetch-depth: 0).
+
+inputs:
+  version:
+    description: gitleaks version. Pinned so a release cannot change a result with no change in the repo.
+    required: false
+    default: v8.30.1
+  report:
+    description: File the log is appended to, for the drift issue.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install gitleaks
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      # go install checks the module against the Go checksum database.
+      run: GOTOOLCHAIN=auto go install "github.com/zricethezav/gitleaks/v8@${VERSION}"
+    - name: Run gitleaks
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE: ${{ github.event.pull_request.base.sha }}
+        HEAD: ${{ github.event.pull_request.head.sha }}
+        BEFORE: ${{ github.event.before }}
+        AFTER: ${{ github.event.after }}
+        REPORT: ${{ inputs.report }}
+      run: bash "$GITHUB_ACTION_PATH/gitleaks.sh"

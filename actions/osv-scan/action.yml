@@ -1,0 +1,52 @@
+name: osv-scanner gate
+description: >-
+  Scan every lockfile (npm, pnpm, yarn, pip, uv, cargo, maven and more) with
+  osv-scanner and fail on a fixable High or Critical vulnerability.
+
+# Why osv-scanner and not npm audit: one pinned scanner covers every
+# ecosystem our repos use (npm in the web apps, uv in mcp-server-buildium),
+# reads lockfiles without installing anything, and has an exemption file with
+# expiry dates (osv-scanner.toml). connectorhub already ran it. The JS repos
+# had no dependency scan in CI before this.
+#
+# Needs: Go on PATH to install osv-scanner, and python3 >= 3.11.
+
+inputs:
+  skip-go:
+    description: >-
+      true: leave Go modules to govulncheck, which reports only called code.
+      osv-scanner would fail on every vulnerable module in go.mod, called or not.
+    required: false
+    default: "true"
+  exclude:
+    description: >-
+      Directories to leave out, one per line, in osv-scanner's
+      --experimental-exclude form (a name, g:glob or r:regex). Files that
+      .gitignore ignores are always left out.
+    required: false
+    default: ""
+  version:
+    description: osv-scanner version. Pinned so a release cannot change a result with no change in the repo.
+    required: false
+    default: v2.6.0
+  report:
+    description: File the log is appended to, for the drift issue.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install osv-scanner
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      # go install checks the module against the Go checksum database.
+      run: GOTOOLCHAIN=auto go install "github.com/google/osv-scanner/v2/cmd/osv-scanner@${VERSION}"
+    - name: Run osv-scanner
+      shell: bash
+      env:
+        SKIP_GO: ${{ inputs.skip-go }}
+        EXCLUDE: ${{ inputs.exclude }}
+        REPORT: ${{ inputs.report }}
+      run: bash "$GITHUB_ACTION_PATH/osv-scan.sh"

@@ -1,0 +1,43 @@
+name: gosec
+description: >-
+  Run gosec, through golangci-lint and the repo's own .golangci.yml, on each
+  Go module.
+
+# Why through golangci-lint and not the gosec binary: 17 repos already run
+# gosec as a golangci-lint linter, with exclusions they have reviewed in
+# .golangci.yml. golangci-lint --enable-only gosec reads that same file, so
+# this check reports what the repo's own lint reports for gosec, no more, and
+# a repo that has no gosec in its lint gets gosec with the defaults.
+#
+# Needs: Go on PATH, set up from the repo's go.mod (gosec type-checks the
+# code), and access to private modules when the repo has any.
+
+inputs:
+  directories:
+    description: Module directories, space separated. Empty means every go.mod outside vendor/, testdata/ and node_modules/.
+    required: false
+    default: ""
+  version:
+    description: golangci-lint version. Pinned so a release cannot change a result with no change in the repo.
+    required: false
+    default: v2.13.2
+  report:
+    description: File the log is appended to, for the drift issue.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install golangci-lint
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      # go install checks the module against the Go checksum database.
+      run: GOTOOLCHAIN=auto go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${VERSION}"
+    - name: Run gosec
+      shell: bash
+      env:
+        DIRS: ${{ inputs.directories }}
+        REPORT: ${{ inputs.report }}
+      run: bash "$GITHUB_ACTION_PATH/gosec.sh"

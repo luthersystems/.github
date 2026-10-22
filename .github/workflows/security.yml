@@ -1,0 +1,238 @@
+name: Security
+
+# The one set of security checks every luthersystems repo runs.
+#
+# Why it exists: before it, each repo picked its own checks. 19 ran
+# govulncheck, in three versions and five copies of the same scripts; one
+# scanned images for CVEs; none scanned private repos for secrets or JS
+# lockfiles for vulnerabilities; and a red security check blocked a merge in
+# four repos. The inventory is in the PLATFORM project ("Security checks
+# inventory"). One reusable workflow, released with this repo's tags, gives
+# every repo the same checks, versions and fail rule, and a fix reaches every
+# repo when v1 moves.
+#
+# Why a reusable workflow and not one composite action: each check is its own
+# job, so they run side by side and each shows as its own check on the PR.
+# The `result` job sums them up, so an org ruleset can require one name,
+# "security / result", in every repo, whatever checks apply to it.
+#
+# What it runs (each check's action explains its choices):
+#   govulncheck   Go modules: called vulnerabilities, with an expiring
+#                 exemptions file. Binary mode too on scheduled runs.
+#   gosec         Go modules: gosec through golangci-lint and the repo's own
+#                 .golangci.yml.
+#   secrets       gitleaks over the commits a PR or push adds, or the files
+#                 at HEAD on a scheduled run.
+#   dependencies  osv-scanner over every lockfile but Go's: fail on a fixable
+#                 High or Critical.
+# A check with nothing to scan (no Go module) is skipped, which counts as
+# passed for a required check.
+#
+# Not here: harden-check, because it needs the image the repo's build job
+# just built; repos that ship images keep calling actions/harden-check in that
+# job. Image CVE scans are a later step.
+#
+# Scheduled scans: a reusable workflow cannot set its own schedule, so each
+# caller sets one. Public repos run nightly (Actions minutes are free there);
+# private repos run weekly, to keep minutes down. A scheduled run that fails
+# opens one `security-drift` issue, which closes itself when a later run is
+# clean. See docs/security-workflow.md for the caller and the rollout.
+
+on:
+  workflow_call:
+    inputs:
+      go-directories:
+        description: Go module directories to scan, space separated. Empty means every go.mod outside vendor/, testdata/ and node_modules/.
+        type: string
+        required: false
+        default: ""
+      govulncheck-exemptions:
+        description: govulncheck exemptions file, relative to the repo root.
+        type: string
+        required: false
+        default: .github/security/govulncheck-exemptions.txt
+      gosec:
+        description: Run gosec on the Go modules.
+        type: boolean
+        required: false
+        default: true
+      osv-exclude:
+        description: Directories osv-scanner leaves out, one per line (a name, g:glob or r:regex).
+        type: string
+        required: false
+        default: ""
+      goprivate:
+        description: GOPRIVATE for the Go jobs. The modules it names are fetched over SSH with the SSH_PRIVATE_KEY secret.
+        type: string
+        required: false
+        default: github.com/luthersystems/license
+      drift-issue:
+        description: Open a security-drift issue when a scheduled run fails.
+        type: boolean
+        required: false
+        default: true
+      runs-on:
+        description: Runner label for every job.
+        type: string
+        required: false
+        default: ubuntu-latest
+    secrets:
+      SSH_PRIVATE_KEY:
+        description: >-
+          SSH key (or keys, one after another) that can read the private Go
+          modules in goprivate. Needed only by repos that import one.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    outputs:
+      go-directories: ${{ steps.detect.outputs.go-directories }}
+      go-version-file: ${{ steps.detect.outputs.go-version-file }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: detect
+        uses: luthersystems/.github/actions/security-detect@v1
+        with:
+          go-directories: ${{ inputs.go-directories }}
+
+  govulncheck:
+    needs: detect
+    if: needs.detect.outputs.go-directories != ''
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Go of the repo's go.mod, so the stdlib scanned is the one we ship.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ needs.detect.outputs.go-version-file }}
+          cache: false
+      - name: Check for an SSH key
+        id: key
+        env:
+          KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: echo "present=$([ -n "$KEY" ] && echo true || echo false)" >>"$GITHUB_OUTPUT"
+      - if: steps.key.outputs.present == 'true'
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Fetch private modules over SSH
+        if: steps.key.outputs.present == 'true'
+        env:
+          GOPRIVATE_IN: ${{ inputs.goprivate }}
+        run: |
+          echo "GOPRIVATE=$GOPRIVATE_IN" >>"$GITHUB_ENV"
+          git config --global url."git@github.com:".insteadOf "https://github.com/"
+      - uses: luthersystems/.github/actions/govulncheck@v1
+        with:
+          directories: ${{ needs.detect.outputs.go-directories }}
+          exemptions: ${{ inputs.govulncheck-exemptions }}
+          binary: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+  gosec:
+    needs: detect
+    if: needs.detect.outputs.go-directories != '' && inputs.gosec
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ needs.detect.outputs.go-version-file }}
+          cache: false
+      - name: Check for an SSH key
+        id: key
+        env:
+          KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: echo "present=$([ -n "$KEY" ] && echo true || echo false)" >>"$GITHUB_OUTPUT"
+      - if: steps.key.outputs.present == 'true'
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Fetch private modules over SSH
+        if: steps.key.outputs.present == 'true'
+        env:
+          GOPRIVATE_IN: ${{ inputs.goprivate }}
+        run: |
+          echo "GOPRIVATE=$GOPRIVATE_IN" >>"$GITHUB_ENV"
+          git config --global url."git@github.com:".insteadOf "https://github.com/"
+      - uses: luthersystems/.github/actions/gosec@v1
+        with:
+          directories: ${{ needs.detect.outputs.go-directories }}
+
+  secrets:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The commit range a PR or push adds must be in the clone.
+          fetch-depth: 0
+          persist-credentials: false
+      # Go only to build the pinned gitleaks.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - uses: luthersystems/.github/actions/gitleaks@v1
+
+  dependencies:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Go only to build the pinned osv-scanner.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - uses: luthersystems/.github/actions/osv-scan@v1
+        with:
+          exclude: ${{ inputs.osv-exclude }}
+
+  # The one check a ruleset requires. It runs even when a check failed or was
+  # skipped, and passes only when every check passed or had nothing to scan.
+  result:
+    needs: [detect, govulncheck, gosec, secrets, dependencies]
+    if: always()
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    permissions:
+      issues: write # the security-drift issue on scheduled runs
+    steps:
+      - name: Sum up the checks
+        id: sum
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          results="$(jq -c 'with_entries(.value = .value.result)' <<<"$NEEDS")"
+          echo "results=$results" >>"$GITHUB_OUTPUT"
+          echo "$results" | jq -r 'to_entries[] | "\(.key): \(.value)"'
+          bad="$(jq -r '[to_entries[] | select(.value != "success" and .value != "skipped") | .key] | join(" ")' <<<"$results")"
+          echo "bad=$bad" >>"$GITHUB_OUTPUT"
+      - name: Open, refresh or close the security-drift issue
+        if: inputs.drift-issue && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: luthersystems/.github/actions/security-drift@v1
+        with:
+          results: ${{ steps.sum.outputs.results }}
+      - name: Fail when a check failed
+        if: steps.sum.outputs.bad != ''
+        env:
+          BAD: ${{ steps.sum.outputs.bad }}
+        run: |
+          echo "::error title=Security checks failed::$BAD. Open each job's log for what it found."
+          exit 1
