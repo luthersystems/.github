@@ -38,7 +38,7 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           "$(go env GOPATH)/bin/actionlint" -color
       - name: Run shellcheck on the action scripts
-        run: shellcheck -x actions/*/*.sh actions/*/check/*.sh tests/*/*.sh
+        run: shellcheck -x actions/*/*.sh actions/*/check/*.sh tests/*/*.sh tests/quality/testdata/api-break/surface.sh
 
   # A passing case runs the action as a caller does (uses: ./actions/...).
   # A failing case runs the action's script with the same inputs and asserts
@@ -152,3 +152,84 @@ jobs:
         run: node tests/security/drift-test.cjs
       - name: osv gate version and fix cases
         run: python3 tests/security/osv_gate_test.py
+
+  # The quality workflow's actions, run as a caller runs them (uses:
+  # ./actions/...), which also installs each pinned tool. Then each test
+  # script runs its gate on cases that must fail and must pass, and asserts
+  # the reason. quality.yml calls the actions at @v1, so it is tested through
+  # its callers once a release moves v1.
+  quality-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      # This repo follows its own rule: every marker names an open issue.
+      - name: "Pass: work markers on this repo"
+        uses: ./actions/work-markers
+        with:
+          check-issues: ${{ github.event_name == 'pull_request' }}
+      - name: "Pass: golangci-lint on a clean module"
+        uses: ./actions/golangci-lint
+        with:
+          directories: tests/quality/testdata/golangci/clean
+      - name: Work marker cases
+        run: bash tests/quality/work-markers-test.sh
+      - name: golangci-lint cases
+        run: bash tests/quality/golangci-lint-test.sh
+      - name: API break cases
+        run: bash tests/quality/api-break-test.sh
+
+  # The benchmark actions: the script cases with fake tools, then one real
+  # run of both actions on a tiny module, as benchmark.yml runs them. Both
+  # arms are the same code, so the real run asserts only that the gate
+  # reached a verdict and wrote the comment: on a shared runner, identical
+  # code can still read as noise (exit 3) or, rarely, as a move (exit 1).
+  benchmark-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Benchmark script cases
+        run: bash tests/benchmark/benchmark-test.sh
+      - name: Lay out the two arms
+        run: |
+          set -euo pipefail
+          # Where benchmark.yml checks them out: base/ and pr/ in the workspace.
+          cp -r tests/benchmark/testdata/module base
+          cp -r tests/benchmark/testdata/module pr
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: tests/benchmark/testdata/module/go.mod
+          cache: false
+      - name: "Run: both arms, interleaved"
+        uses: ./actions/benchmark-run
+        with:
+          count: 6
+          benchtime: 10ms
+      - name: "Gate: compare and decide"
+        id: gate
+        uses: ./actions/benchmark-gate
+        continue-on-error: true
+        with:
+          comment: "false"
+          count: 6
+      - name: Check the gate reached a verdict
+        env:
+          STATUS: ${{ steps.gate.outputs.gate-status }}
+          COMMENT: ${{ steps.gate.outputs.comment-file }}
+        run: |
+          set -euo pipefail
+          echo "gate status: ${STATUS:-<none>}"
+          case "$STATUS" in 0 | 1 | 3) ;; *) echo "::error::the gate reached no verdict (status ${STATUS:-<none>})"; exit 1 ;; esac
+          grep -q '^## Benchmark comparison (base vs PR)' "$COMMENT"
