@@ -34,7 +34,7 @@ repo when `v1` moves.
 A job with nothing to scan is skipped, which counts as passed. So the one
 check to require is `security / result`, in every repo.
 
-Each tool is pinned (govulncheck v1.8.0, golangci-lint v2.13.2, gitleaks
+Each tool is pinned (govulncheck v1.8.0, golangci-lint v2.15.0, gitleaks
 v8.30.1, osv-scanner v2.6.0) and installed with `go install`, which checks the
 module against the Go checksum database. A new tool version is a change to
 this repo, reviewed once.

@@ -18,9 +18,12 @@ inputs:
     required: false
     default: ""
   version:
-    description: golangci-lint version. Pinned so a release cannot change a result with no change in the repo.
+    description: >-
+      golangci-lint version. Pinned so a release cannot change a result with
+      no change in the repo. It must read the export data of the newest Go a
+      repo uses: v2.13.2 cannot type-check with Go 1.27, v2.15.0 can.
     required: false
-    default: v2.13.2
+    default: v2.15.0
 
 runs:
   using: composite
