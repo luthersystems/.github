@@ -34,6 +34,11 @@ runs:
       shell: bash
       env:
         GOPRIVATE_IN: ${{ inputs.goprivate }}
+      # GIT_LFS_SKIP_SMUDGE: go fetches a GOPRIVATE module with git, and the
+      # runner has git-lfs. Without it, LFS writes the real bytes of a tracked
+      # file (substrate's *.zip and *.pgo) where go.sum hashed the LFS pointer,
+      # so go fails with "checksum mismatch" (seen in libmxf).
       run: |
         echo "GOPRIVATE=$GOPRIVATE_IN" >>"$GITHUB_ENV"
+        echo "GIT_LFS_SKIP_SMUDGE=1" >>"$GITHUB_ENV"
         git config --global url."git@github.com:".insteadOf "https://github.com/"
