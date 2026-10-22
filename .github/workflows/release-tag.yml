@@ -1,0 +1,162 @@
+name: Release (tag)
+
+# Shared release cut for luthersystems libraries, called with workflow_call
+# from each repo's own small release-tag.yml.
+#
+# Why it is shared: by 2026-10 nineteen repos carried their own copy of a
+# release-tag workflow, and the copies drifted. luthersystems/svc's original
+# left two checks to the person who dispatched it; the copies made for
+# insideout-terraform-presets#897 and libmxf#11 added them because an agent
+# dispatches them. One copy here means a fix (or a new check) lands once.
+#
+# Why it lives in a public repo: GitHub lets other repos call a private repo's
+# workflows only when they are private or internal too, and most callers
+# (svc, the presets, libmxf, the SDKs) are public. The workflow holds no
+# secret: it tags the CALLING repo with the caller's own token.
+#
+# Checks, in order:
+# - The run is on main and its commit is GitHub's live main, so a stale
+#   dispatch cannot tag an older commit.
+# - The caller's CI workflow (input ci_workflow) has a successful push run
+#   for that commit, so a red main is never released.
+# - The version is vMAJOR.MINOR.PATCH with no leading zeros (Go ignores
+#   v0.012.0 as a module version, so such a tag could never be fetched), is
+#   not tagged yet, and is strictly newer than the latest release tag.
+#
+# Token: the caller's GITHUB_TOKEN creates the tag and the release. A tag
+# created with it triggers no other workflow, so a repo whose tag starts a
+# build (an image, a deploy) cannot use this version yet: those repos cut
+# with the Claude App token today.
+#
+# Caller contract: the calling job must grant `actions: read` (read the CI
+# runs) and `contents: write` (create the release); a called workflow cannot
+# raise its caller's permissions. In a called workflow the github context is
+# the caller's, so github.repository, github.ref and github.sha below name
+# the calling repo and its dispatch.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to tag (vMAJOR.MINOR.PATCH). Empty = auto-bump patch of the latest tag."
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: "Print the computed version but do NOT cut the release"
+        type: boolean
+        required: false
+        default: false
+      ci_workflow:
+        description: "File name of the caller's CI workflow, e.g. svc.yml. It must run on push to main."
+        type: string
+        required: true
+    outputs:
+      version:
+        description: "The version released (or, on a dry run, the one that would be)"
+        value: ${{ jobs.release.outputs.version }}
+
+jobs:
+  release:
+    name: Cut release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # One release at a time per calling repo. A queued release waits rather
+    # than cancels, so two dispatches never race for the same next version.
+    concurrency:
+      group: release-tag-${{ github.repository }}
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # all tags, for latest-version detection
+          persist-credentials: false # gh uses GH_TOKEN; git only reads tags
+      - name: Check the commit is live main and CI passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_WORKFLOW: ${{ inputs.ci_workflow }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "error: dispatch this workflow on main, not $GITHUB_REF" >&2
+            exit 1
+          fi
+          live=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$live" != "$GITHUB_SHA" ]; then
+            echo "error: run commit $GITHUB_SHA is not live main $live; dispatch again" >&2
+            exit 1
+          fi
+          # Name the state of the newest push run, so a red main reads as
+          # red, not as "wait": waiting will not fix a failed run.
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$CI_WORKFLOW/runs?head_sha=$GITHUB_SHA&event=push" \
+            --jq '[.workflow_runs[] | {status, conclusion, url: .html_url}]')
+          if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")" -lt 1 ]; then
+            latest_run=$(jq -r 'if length == 0 then "none" else (.[0] | "\(.status) \(.conclusion // "-") \(.url)") end' <<<"$runs")
+            echo "error: no successful push run of $CI_WORKFLOW for $GITHUB_SHA (newest: $latest_run)" >&2
+            echo "error: wait for a run in progress; fix or re-run a failed one" >&2
+            exit 1
+          fi
+          echo "commit $GITHUB_SHA is live main and $CI_WORKFLOW passed"
+      - name: Compute and validate version
+        id: ver
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          latest=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+          if [ -n "$REQUESTED" ]; then
+            version="$REQUESTED"
+          elif [ -n "$latest" ]; then
+            IFS=. read -r major minor patch <<<"${latest#v}"
+            # 10# so a legacy leading-zero tag (v1.2.08) is read as decimal,
+            # not as an invalid octal number.
+            version="v$((10#$major)).$((10#$minor)).$((10#$patch + 1))"
+          else
+            echo "error: no existing vMAJOR.MINOR.PATCH tag to bump from; pass an explicit version" >&2
+            exit 1
+          fi
+          echo "$version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+            echo "error: version '$version' is not vMAJOR.MINOR.PATCH without leading zeros" >&2
+            exit 1
+          }
+          # A second dispatch queued behind the first (concurrency above)
+          # runs on the same live main and would auto-bump again, cutting a
+          # second release of one commit. Refuse a commit already released.
+          already=$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | tr '\n' ' ' || true)
+          if [ -n "$already" ]; then
+            echo "error: commit $GITHUB_SHA is already released as $already" >&2
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            echo "error: tag $version already exists" >&2
+            exit 1
+          fi
+          if [ -n "$latest" ]; then
+            newest=$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -n1)
+            if [ "$newest" != "$version" ]; then
+              echo "error: version $version is not strictly newer than latest tag $latest" >&2
+              exit 1
+            fi
+          fi
+          echo "computed version: $version (latest existing: ${latest:-none})"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Dry run — print only
+        if: ${{ inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: echo "DRY RUN — would release $VERSION from $GITHUB_SHA; nothing created."
+      - name: Cut release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$VERSION" \
+            --target "$GITHUB_SHA" \
+            --generate-notes
+          echo "released $VERSION at $GITHUB_SHA"
