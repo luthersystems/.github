@@ -9,7 +9,7 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 check=$here/../../actions/harden-check/check/dockerfile.sh
 d=$here/dockerfiles
-kit=luthersystems/build-harden:v0.1.45@sha256:ed783a0cd4faf6cd791b844970f00309cec76c4ab90b1e111d641ba44d67ba46
+kit=luthersystems/build-harden:v0.1.46@sha256:f3c02942cf086e8b976f0bf3e7a089bd29efdb34e788f0eaad64f38db76d4c05
 rc_all=0
 
 # expect NAME CODE ARGS...: dockerfile.sh ARGS exits CODE.

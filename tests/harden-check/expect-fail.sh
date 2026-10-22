@@ -13,18 +13,13 @@ kit=${KIT:?}
 rc_all=0
 
 # expect NAME CODE PATTERN VAR=VALUE...: run the script with the inputs, and
-# want exit CODE and a line that matches PATTERN (grep -E). With ONLY set (a
-# regex), every FAIL line but the last summary must match it too, so a case
-# fails if anything else goes wrong in the same image.
+# want exit CODE and a line that matches PATTERN (grep -E).
 expect() {
-	local name=$1 want=$2 pattern=$3 log rc=0 other=
+	local name=$1 want=$2 pattern=$3 log rc=0
 	shift 3
 	log=$(mktemp)
-	env HC_KIT= HC_DOCKERFILES= HC_IMAGES= HC_PLATFORMS= HC_ALLOW= "$@" bash "$script" >"$log" 2>&1 || rc=$?
-	if [ -n "${ONLY:-}" ]; then
-		other=$(grep '^FAIL: ' "$log" | grep -v ' does not hold the build-harden policy$' | grep -vE -- "$ONLY" || true)
-	fi
-	if [ "$rc" -eq "$want" ] && grep -qE -- "$pattern" "$log" && [ -z "$other" ]; then
+	env HC_KIT= HC_DOCKERFILES= HC_SAME_KIT= HC_IMAGES= HC_PLATFORMS= HC_ALLOW= "$@" bash "$script" >"$log" 2>&1 || rc=$?
+	if [ "$rc" -eq "$want" ] && grep -qE -- "$pattern" "$log"; then
 		echo "ok: $name (exit $rc)"
 	else
 		echo "::error::$name: want exit $want and /$pattern/, got exit $rc"
@@ -34,28 +29,25 @@ expect() {
 	rm -f "$log"
 }
 
+# same-kit: a file that pins another kit, or none, fails before any image
+# is checked (exit 2, the check could not be trusted).
+expect "a same-kit file that pins another kit" 2 'same-kit: .*other-kit.Dockerfile pins luthersystems/build-harden:v0.1.44' \
+	HC_KIT="$kit" HC_SAME_KIT="$here/same-kit/other-kit.Dockerfile" HC_IMAGES="alpine:3.22"
+expect "a same-kit file that pins no kit" 2 'same-kit: .*no-kit.Dockerfile pins no luthersystems/build-harden stage' \
+	HC_KIT="$kit" HC_SAME_KIT="$here/same-kit/no-kit.Dockerfile" HC_IMAGES="alpine:3.22"
+
 expect "an image that trusts the listed CAs" 1 '^FAIL: /etc/ssl/certs/ca-certificates.crt: holds ' \
 	HC_KIT="$kit" HC_IMAGES="alpine:3.22@sha256:822614ea121e1d40a33655081af10ef85f0aa2ab9e61f649ceaf0c651822433c"
 
 expect "headless-shell with no NSS database (buildenv#165)" 1 'headless-shell: Chrome uses its built-in roots' \
 	HC_DOCKERFILES="$here/chrome-no-nssdb" HC_IMAGES="harden-check-test/chrome-no-nssdb"
 
-# The kit v0.1.45 does not edit a blocked.certs that is a link
-# (luthersystems/buildenv#166), and the check resolves it inside the image.
-# Move this case to the passing ones in ci.yml once a kit with the fix is
-# released and the fixture pins it.
-# The keystore is a link too: it must be found and read (the "checked"
-# line), and the blocked.certs lines must be the only failures.
-ONLY='^FAIL: /etc/java-17-openjdk/security/blocked.certs: does not block ' \
-	expect "a Debian JDK whose blocked.certs is a link (buildenv#166)" 1 '^/etc/ssl/certs/java/cacerts: checked$' \
-	HC_DOCKERFILES="$here/debian-jdk" HC_IMAGES="harden-check-test/debian-jdk"
-
-expect "a Dockerfile that pins another kit" 2 'a Dockerfile pins luthersystems/build-harden:v0.1.45@' \
+expect "a Dockerfile that pins another kit" 2 'a Dockerfile pins luthersystems/build-harden:v0.1.46@' \
 	HC_KIT="luthersystems/build-harden:v0.1.44@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
 	HC_DOCKERFILES="$here/nss-other-nickname"
 
 expect "a kit pinned by tag only" 2 'is not luthersystems/build-harden:<tag>@sha256:<digest>' \
-	HC_KIT="luthersystems/build-harden:v0.1.45" HC_IMAGES="alpine:3.22"
+	HC_KIT="luthersystems/build-harden:v0.1.46" HC_IMAGES="alpine:3.22"
 
 expect "no input" 2 'set dockerfiles, images or both'
 

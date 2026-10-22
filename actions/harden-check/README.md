@@ -28,7 +28,7 @@ kit release and no PR per repo.
 - uses: luthersystems/.github/actions/harden-check@v1
   with:
     # Optional when the Dockerfiles pin the kit stage.
-    kit: luthersystems/build-harden:v0.1.45@sha256:ed783a0cd4faf6cd791b844970f00309cec76c4ab90b1e111d641ba44d67ba46
+    kit: luthersystems/build-harden:v0.1.46@sha256:f3c02942cf086e8b976f0bf3e7a089bd29efdb34e788f0eaad64f38db76d4c05
     dockerfiles: Dockerfile
     images: |
       my-image:${{ github.sha }}
@@ -39,6 +39,7 @@ kit release and no PR per repo.
 |---|---|---|
 | `kit` | read from the Dockerfiles | The kit image, pinned by digest. Set it for an image with no Dockerfile (ko) or one built on a hardened base image. A Dockerfile that pins another kit fails. |
 | `dockerfiles` | none | Dockerfiles or directories to check: the kit must run last in the final stage. |
+| `same-kit` | none | Files that must pin the kit checked but get no Dockerfile check, such as a Dockerfile whose final stage is a hardened base image while an earlier stage runs the kit. A file that pins another kit, or none, fails. This catches a kit bump that misses a file. |
 | `images` | none | One image per line: `REF`, or `REF PLATFORM` for a tag that holds one platform (separate amd64 and arm64 tags). |
 | `platforms` | the image's default | Platforms to check for each image line that names none. |
 | `min-roots` | `100` | The fewest certificates the system bundle must hold. `0` allows an image with no TLS client. |
@@ -66,4 +67,7 @@ that needs callers to change goes to `v2`. `release.yml` cuts the releases.
 `ci.yml` runs the action on both architectures: a hardened base image passes,
 a plain Alpine image fails, and fixtures in `tests/harden-check` cover an NSS
 database that holds a listed certificate under another nickname, and a
-chromedp `headless-shell` binary (both from luthersystems/buildenv#165).
+chromedp `headless-shell` binary (both from luthersystems/buildenv#165), and a Debian JDK whose
+blocked.certs is a link (luthersystems/buildenv#166).
+The `same-kit` fixtures cover a file that pins the kit checked (passes),
+another kit and no kit (both fail).

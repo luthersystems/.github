@@ -35,6 +35,14 @@ inputs:
       space separated). Empty: no Dockerfile check.
     required: false
     default: ""
+  same-kit:
+    description: >-
+      Files (one per line or space separated) that must pin the kit checked,
+      but get no Dockerfile check: for example a Dockerfile whose final stage
+      is a hardened base image, while an earlier stage runs the kit. Each
+      file must pin exactly that kit. Empty: no such files.
+    required: false
+    default: ""
   images:
     description: >-
       Images to check, one per line: REF, or REF PLATFORM for an image tag
@@ -81,6 +89,7 @@ runs:
       env:
         HC_KIT: ${{ inputs.kit }}
         HC_DOCKERFILES: ${{ inputs.dockerfiles }}
+        HC_SAME_KIT: ${{ inputs.same-kit }}
         HC_IMAGES: ${{ inputs.images }}
         HC_PLATFORMS: ${{ inputs.platforms }}
         HC_MIN_ROOTS: ${{ inputs.min-roots }}

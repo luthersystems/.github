@@ -54,7 +54,7 @@ jobs:
         # work on the arm runners too.
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     env:
-      KIT: luthersystems/build-harden:v0.1.45@sha256:ed783a0cd4faf6cd791b844970f00309cec76c4ab90b1e111d641ba44d67ba46
+      KIT: luthersystems/build-harden:v0.1.46@sha256:f3c02942cf086e8b976f0bf3e7a089bd29efdb34e788f0eaad64f38db76d4c05
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -62,7 +62,7 @@ jobs:
         uses: ./actions/harden-check
         with:
           kit: ${{ env.KIT }}
-          images: luthersystems/service-base-alpine:v0.1.45@sha256:45e7d2a2f7cf115872862ece632c2057993ebff4f72c696e0bf18d77db9dece3
+          images: luthersystems/service-base-alpine:v0.1.46@sha256:5837ed9fc5d0db08314ffed43306a9c0779f85c990ee3b40b22236c4f779b988
           platforms: linux/amd64 linux/arm64
 
       - name: Build the fixture images
@@ -79,7 +79,19 @@ jobs:
         uses: ./actions/harden-check
         with:
           dockerfiles: tests/harden-check/nss-other-nickname/Dockerfile
+          # A file shaped like connectorhub's Dockerfile-go: it must pin the
+          # kit read from the Dockerfile above.
+          same-kit: tests/harden-check/same-kit/same-kit.Dockerfile
           images: harden-check-test/nss-other-nickname ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
+
+      # buildenv#166: a Debian JDK links cacerts and blocked.certs to /etc.
+      # The kit must edit the linked blocked.certs, and the check must follow
+      # both links inside the image.
+      - name: "Pass: a Debian JDK whose blocked.certs is a link"
+        uses: ./actions/harden-check
+        with:
+          dockerfiles: tests/harden-check/debian-jdk/Dockerfile
+          images: harden-check-test/debian-jdk ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
 
       - name: Dockerfile check cases
         run: bash tests/harden-check/dockerfile-test.sh

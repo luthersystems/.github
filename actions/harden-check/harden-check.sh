@@ -13,6 +13,8 @@
 #   HC_KIT              kit image, luthersystems/build-harden:<tag>@sha256:<digest>
 #                       (empty: read it from the Dockerfiles)
 #   HC_DOCKERFILES      Dockerfiles or directories, one per line or space
+#   HC_SAME_KIT         files that must pin the kit checked (no Dockerfile
+#                       check), one per line or space
 #   HC_IMAGES           one image per line: REF, or REF PLATFORM
 #   HC_PLATFORMS        platforms for an image line with no platform
 #   HC_MIN_ROOTS        passed to image.sh --min-roots
@@ -38,6 +40,8 @@ kit_re='^luthersystems/build-harden:[^[:space:]@]+@sha256:[0-9a-f]{64}$'
 
 dockerfiles=()
 while IFS= read -r f; do dockerfiles+=("$f"); done < <(words "${HC_DOCKERFILES:-}")
+same_kit=()
+while IFS= read -r f; do same_kit+=("$f"); done < <(words "${HC_SAME_KIT:-}")
 image_lines=()
 while IFS= read -r l; do
 	l=$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' <<<"$l")
@@ -65,7 +69,7 @@ done <<<"${HC_ALLOW:-}"
 # The Dockerfiles' kits: the build-harden stages they pin. The image check
 # must read the policy of the kit that hardened the image, so a Dockerfile
 # that pins another kit than the one checked fails.
-for f in "${dockerfiles[@]}"; do
+for f in "${dockerfiles[@]}" "${same_kit[@]}"; do
 	[ -e "$f" ] || die "$f: no such file or directory"
 done
 # dockerfile.sh parses the Dockerfiles (comments, continued lines, which
@@ -87,6 +91,17 @@ fi
 [[ $kit =~ $kit_re ]] || die "kit '$kit' is not luthersystems/build-harden:<tag>@sha256:<digest>"
 for k in "${df_kits[@]}"; do
 	[ "$k" = "$kit" ] || die "a Dockerfile pins $k, but the kit checked is $kit"
+done
+# The same-kit files: each must pin exactly the kit checked. Why: a file
+# such as connectorhub's Dockerfile-go hardens an earlier stage and ships a
+# hardened base image, so the Dockerfile check (final stage only) cannot
+# take it. Without this, a kit bump that misses the file goes unseen.
+for f in "${same_kit[@]}"; do
+	[ -f "$f" ] || die "same-kit: $f is not a file"
+	got=$(bash "$here/check/dockerfile.sh" --list-kits "$f") || die "cannot read $f: $got"
+	got=$(sed '/^$/d' <<<"$got" | sort -u)
+	[ -n "$got" ] || die "same-kit: $f pins no luthersystems/build-harden stage"
+	[ "$got" = "$kit" ] || die "same-kit: $f pins $(paste -sd ' ' - <<<"$got"), but the kit checked is $kit"
 done
 echo "kit: $kit"
 
