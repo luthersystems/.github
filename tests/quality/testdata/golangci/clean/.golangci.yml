@@ -1,0 +1,8 @@
+# Test fixture for tests/quality/golangci-lint-test.sh. The standard set
+# (errcheck, govet, ineffassign, staticcheck, unused) plus misspell, which
+# the shared baseline does not enable, so the drift report has a linter the
+# repo adds and linters it lacks.
+version: "2"
+linters:
+  enable:
+    - misspell
