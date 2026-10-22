@@ -21,7 +21,11 @@ name: Release (tag)
 #   for that commit, so a red main is never released.
 # - The version is vMAJOR.MINOR.PATCH with no leading zeros (Go ignores
 #   v0.012.0 as a module version, so such a tag could never be fetched), is
-#   not tagged yet, and is strictly newer than the latest release tag.
+#   not tagged yet, and is strictly newer than the latest release tag of its
+#   own major. Its major must be at least the highest major among tags on
+#   main, and, when the caller sets input majors, one of those majors. The
+#   same-major rule lets a repo keep tags of an experimental later major off
+#   main (substrate's v3) without refusing releases of main's line (v2).
 #
 # Token (input release_token):
 # - github (default): the caller's GITHUB_TOKEN creates the tag and the
@@ -72,6 +76,14 @@ on:
         type: number
         required: false
         default: 15
+      majors:
+        description: >-
+          Space-separated majors that may be released, e.g. "2". Empty = any
+          major at or above the highest one on main. Set it when a later major
+          is experimental (substrate's v3), so main cannot get a release of it.
+        type: string
+        required: false
+        default: ""
       release_token:
         description: "github (default GITHUB_TOKEN) or claude-app (Claude App token, so the tag triggers workflows)"
         type: string
@@ -194,27 +206,54 @@ jobs:
         id: ver
         env:
           REQUESTED: ${{ inputs.version }}
+          MAJORS: ${{ inputs.majors }}
         run: |
           set -euo pipefail
-          # Compare versions numerically in python: sort -V treats v1.2.08 and
-          # v1.2.8 as equal, and bash arithmetic overflows past 64 bits.
-          vkey='def key(t):
-              return tuple((len(p.lstrip("0")), p.lstrip("0")) for p in t[1:].split("."))'
-          # grep exits 1 when no tag matches (a repo's first release), which
-          # pipefail would turn into a silent exit; || true keeps the empty list.
-          latest=$(git tag --list 'v*' | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
-            | python3 -Ic "$vkey"$'\nimport sys\ntags=sys.stdin.read().split()\nprint(max(tags, key=key) if tags else "")')
-          if [ -n "$REQUESTED" ]; then
-            version="$REQUESTED"
-          elif [ -n "$latest" ]; then
-            IFS=. read -r major minor patch <<<"${latest#v}"
-            # 10# so a legacy leading-zero tag (v1.2.08) is read as decimal,
-            # not as an invalid octal number.
-            version="v$((10#$major)).$((10#$minor)).$((10#$patch + 1))"
-          else
-            echo "error: no existing vMAJOR.MINOR.PATCH tag to bump from; pass an explicit version" >&2
-            exit 1
-          fi
+          # One version rule for every repo. A new version must be newer than
+          # the latest tag OF ITS OWN MAJOR, and its major must be at least
+          # the highest major among tags on main. With one major line this is
+          # "newer than the latest tag". It also lets a repo keep tags of a
+          # later major off main (substrate's experimental v3.0.0) without
+          # refusing every release of main's line (v2.x).
+          # Python, not sort -V or bash arithmetic: sort -V treats v1.2.08 and
+          # v1.2.8 as equal, and bash overflows past 64 bits.
+          picked=$(python3 -I - "$REQUESTED" "$MAJORS" <<'PY'
+          import re, subprocess, sys
+          STABLE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+          def key(t):
+              return tuple((len(p.lstrip("0")), p.lstrip("0")) for p in t[1:].split("."))
+          def tags(*args):
+              out = subprocess.run(["git", "tag", "--list", "v*", *args], check=True,
+                                   capture_output=True, text=True).stdout.split()
+              return [t for t in out if STABLE.fullmatch(t)]
+          all_tags, main_tags = tags(), tags("--merged", "HEAD")
+          main_major = max((key(t)[0] for t in main_tags), default=None)
+          requested = sys.argv[1]
+          majors = sys.argv[2].split()
+          if any(not re.fullmatch(r"0|[1-9][0-9]*", m) for m in majors):
+              sys.exit(f"majors must be whole numbers without leading zeros, not {sys.argv[2]!r}")
+          if requested:
+              version = requested
+          elif main_major is None:
+              sys.exit("no vMAJOR.MINOR.PATCH tag on main to bump from; pass an explicit version")
+          else:
+              base = max((t for t in all_tags if key(t)[0] == main_major), key=key)
+              major, minor, patch = (int(p) for p in base[1:].split("."))
+              version = f"v{major}.{minor}.{patch + 1}"
+          if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+              sys.exit(f"version {version!r} is not vMAJOR.MINOR.PATCH without leading zeros")
+          if main_major is not None and key(version)[0] < main_major:
+              sys.exit(f"{version} is below major {main_major[1] or '0'}, the highest on main")
+          if majors and version[1:].split(".")[0] not in majors:
+              sys.exit(f"{version}: major is not in majors ({' '.join(majors)}); this repo releases only those")
+          same = [t for t in all_tags if key(t)[0] == key(version)[0]]
+          latest = max(same, key=key) if same else ""
+          if latest and key(version) <= key(latest):
+              sys.exit(f"version {version} is not strictly newer than {latest}, the latest tag of its major")
+          print(version, latest)
+          PY
+          ) || { echo "error: version check failed" >&2; exit 1; }
+          read -r version latest <<<"$picked"
           # [[ =~ ]] tests the whole value; grep would pass a value with a
           # valid first line and more lines after it.
           [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
@@ -232,12 +271,6 @@ jobs:
           if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
             echo "error: tag $version already exists" >&2
             exit 1
-          fi
-          if [ -n "$latest" ]; then
-            if ! python3 -Ic "$vkey"$'\nimport sys\nsys.exit(0 if key(sys.argv[1]) > key(sys.argv[2]) else 1)' "$version" "$latest"; then
-              echo "error: version $version is not strictly newer than latest tag $latest" >&2
-              exit 1
-            fi
           fi
           echo "computed version: $version (latest existing: ${latest:-none})"
           {
