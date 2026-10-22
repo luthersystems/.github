@@ -30,6 +30,10 @@ expect "CMD and HEALTHCHECK after the kit" 0 "$d/pass-cmd-after.Dockerfile"
 expect "a package step after the kit" 1 "$d/fail-run-after.Dockerfile"
 expect "a package step in a RUN heredoc after the kit" 1 "$d/fail-heredoc-after.Dockerfile"
 expect "a lowercase run after the kit" 1 "$d/fail-lowercase-after.Dockerfile"
+expect "a heredoc line that starts with env" 1 "$d/fail-env-heredoc-after.Dockerfile"
+expect "a lowercase copy --from after the kit" 1 "$d/fail-lowercase-copy-after.Dockerfile"
+expect "a lowercase from final stage" 1 "$d/fail-lowercase-from.Dockerfile"
+expect "a local COPY and a COPY heredoc after the kit" 0 "$d/pass-copy-heredoc-after.Dockerfile"
 expect "the fixture Dockerfiles" 0 "$here/nss-other-nickname" "$here/chrome-no-nssdb"
 
 got=$(bash "$check" --list-kits "$d/pass-cmd-after.Dockerfile")

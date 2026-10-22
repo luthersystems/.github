@@ -153,9 +153,9 @@ chmod -R u+rwX "$root"
 
 
 # is_binary FILE: FILE holds a NUL byte.
-# Only the first 64 KiB are read: a binary holds a NUL byte near its start,
-# and a file of several GB must not be read in full.
-is_binary() { [ "$(head -c 65536 "$1" | tr -d '\000' | wc -c)" -ne "$(head -c 65536 "$1" | wc -c)" ]; }
+# The read stops at the first NUL, so a large binary is not read in full,
+# and a NUL anywhere counts, as in the DER search below.
+is_binary() { [ "$(tr -dc '\000' <"$1" | head -c 1 | wc -c)" -gt 0 ]; }
 
 # in_root PATH: the file PATH names in the image, with every link resolved
 # inside the image root. A plain test of "$root$PATH" would follow an absolute
@@ -312,7 +312,7 @@ while IFS= read -r f; do
 		inblk && /^-----END (TRUSTED )?CERTIFICATE-----$/ { inblk = 0; next }
 		inblk { buf = buf $0 "\n"; next }
 		{ print }
-		END { if (inblk) printf "%s", buf }' | grep -cF -f "$work/probes" | grep -qv '^0$'; then
+		END { if (inblk) printf "%s", buf }' | grep -F -f "$work/probes" >/dev/null; then
 		bad "$path: holds a listed certificate's text in a layout openssl cannot read"
 	fi
 	# Does a listed certificate verify against this file as a trust store?
@@ -346,48 +346,49 @@ else
 	[ "$min_roots" -eq 0 ] || bad "no system CA bundle (node:alpine and others ship none: install ca-certificates before the kit)"
 fi
 
-# Java. A JDK's own keystore (lib/security/cacerts) needs the JDK's
-# blocked.certs too; a keystore that only p11-kit extracts for a JDK that
-# is not in the image needs none.
+# Java. Every keystore must not hold a listed certificate, and every JDK
+# (a lib/security directory with a cacerts, a file or a link) needs its own
+# blocked.certs that blocks every listed certificate. Debian and RHEL JDKs
+# link both files to /etc, so each is resolved inside the image. A keystore
+# that only p11-kit extracts for a JDK that is not in the image needs no
+# blocked.certs.
+# check_blocked FILE PATH: FILE (PATH in the image) blocks every listed one.
+check_blocked() {
+	local fp
+	for fp in "${!listed[@]}"; do
+		grep -qxi "$fp" "$1" || bad "$2: does not block ${listed[$fp]#* }"
+	done
+	echo "$2: checked"
+}
 find "$root" -type f -name cacerts -print0 2>/dev/null >"$work/keystores" || true
-if [ -s "$work/keystores" ]; then
-	while IFS= read -r -d '' ks; do
-		path=${ks#"$root"}
-		allowed "$path" && continue
-		# A PEM file named cacerts (some distributions) is checked above.
-		is_binary "$ks" || continue
-		# Every JDK needs its own blocked.certs: one JDK's file does not
-		# protect another.
-		case $path in */lib/security/cacerts)
-			if bc=$(in_root "${path%/cacerts}/blocked.certs"); then
-				# Checked here too, as the image resolves it: a link to
-				# /etc/java-*/security is skipped by the find below.
-				for fp in "${!listed[@]}"; do
-					grep -qxi "$fp" "$bc" || bad "${path%/cacerts}/blocked.certs: does not block ${listed[$fp]#* }"
-				done
-			else
-				bad "$path: a JDK keystore with no blocked.certs beside it"
-			fi
-			;;
-		esac
-		if ! out=$(keytool -list -keystore "$ks" -storepass changeit 2>&1); then
-			bad "$path: keytool cannot read it: $out"
-			continue
-		fi
-		while read -r fp; do
-			fp=$(tr -d : <<<"$fp" | tr 'A-F' 'a-f')
-			[ -n "${listed[$fp]:-}" ] && bad "$path: holds ${listed[$fp]#* }"
-		done < <(sed -n 's/.*fingerprint (SHA-256): //p' <<<"$out")
-		echo "$path: checked"
-	done <"$work/keystores"
-	find "$root" -type f -name blocked.certs -path '*/lib/security/*' -print0 >"$work/blocked" 2>/dev/null || true
-	while IFS= read -r -d '' bc; do
-		for fp in "${!listed[@]}"; do
-			grep -qxi "$fp" "$bc" || bad "${bc#"$root"}: does not block ${listed[$fp]#* }"
-		done
-		echo "${bc#"$root"}: checked"
-	done <"$work/blocked"
-fi
+while IFS= read -r -d '' ks; do
+	path=${ks#"$root"}
+	allowed "$path" && continue
+	# A PEM file named cacerts (some distributions) is checked above.
+	is_binary "$ks" || continue
+	if ! out=$(keytool -list -keystore "$ks" -storepass changeit 2>&1); then
+		bad "$path: keytool cannot read it: $out"
+		continue
+	fi
+	while read -r fp; do
+		fp=$(tr -d : <<<"$fp" | tr 'A-F' 'a-f')
+		[ -n "${listed[$fp]:-}" ] && bad "$path: holds ${listed[$fp]#* }"
+	done < <(sed -n 's/.*fingerprint (SHA-256): //p' <<<"$out")
+	echo "$path: checked"
+done <"$work/keystores"
+declare -A seen_blocked=()
+while IFS= read -r -d '' jks; do
+	sec=${jks%/cacerts}
+	sec=${sec#"$root"}
+	allowed "$sec/cacerts" && continue
+	if ! bc=$(in_root "$sec/blocked.certs"); then
+		bad "$sec: a JDK with no blocked.certs"
+		continue
+	fi
+	[ -z "${seen_blocked[$bc]:-}" ] || continue
+	seen_blocked[$bc]=1
+	check_blocked "$bc" "${bc#"$root"}"
+done < <(find "$root" -path '*/lib/security/cacerts' \( -type f -o -type l \) -print0 2>/dev/null)
 
 # NSS.
 find "$root" -type f \( -name cert9.db -o -name cert8.db \) -print0 2>/dev/null >"$work/nss" || true
@@ -419,7 +420,8 @@ if [ -s "$work/nss" ]; then
 				# Any other certificate with a listed key (a cross-signed
 				# copy) must be distrusted too: the DER search skips NSS
 				# databases, so this is where it is caught.
-				kfp=$(openssl x509 -in "$pem" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | cut -c1-64)
+				# A key the host openssl cannot load is not a listed key.
+				kfp=$(openssl x509 -in "$pem" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | cut -c1-64) || kfp=
 				if [ -z "${listed[$fp]:-}" ] && [ -n "${listed_key[$kfp]:-}" ] && [ "$trust" != p,p,p ]; then
 					bad "$path: '$nick' has the key of ${listed_key[$kfp]} and trust $trust, not p,p,p"
 				fi

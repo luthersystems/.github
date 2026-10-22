@@ -69,8 +69,30 @@ for f in "${files[@]}"; do
 		grep -iE "$kit_re" <<<"$text" | awk '{ for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; break } }' || true
 		continue
 	fi
-	last_from=$(grep -n '^[[:space:]]*FROM[[:space:]]' <<<"$text" | tail -1 | cut -d: -f1)
-	stage=$(tail -n +"${last_from:-1}" <<<"$text")
+	# Tag each line: I an instruction, R the body of a RUN heredoc, B the
+	# body of another heredoc (COPY <<EOF). A heredoc body is not an
+	# instruction (a line "FROM x" in it starts no stage), but a RUN
+	# heredoc's body runs in the build, so its package steps count.
+	tagged=$(awk -v q="'" '
+		hd != "" { print (hrun ? "R" : "B") $0; t = $0; sub(/^\t+/, "", t); if (t == hd) hd = ""; next }
+		{
+			print "I" $0
+			re = "(^|[^<])<<-?[ \t]*[\"" q "]?[A-Za-z_][A-Za-z0-9_]*"
+			if (match($0, re)) {
+				w = substr($0, RSTART, RLENGTH)
+				sub("^[^<]?<<-?[ \t]*[\"" q "]?", "", w)
+				hd = w
+				hrun = (tolower($1) == "run")
+			}
+		}' <<<"$text")
+	# Two views with the same line numbers: the instructions only, and the
+	# lines that run in the build (RUN instructions and RUN heredoc bodies).
+	itext=$(sed -E 's/^I//; t; s/.*//' <<<"$tagged")
+	rtext=$(awk '/^R/ || (/^I/ && tolower(substr($1, 2)) == "run") { print substr($0, 2); next } { print "" }' <<<"$tagged")
+	# Instructions are not case-sensitive: "from" starts a stage too.
+	last_from=$(grep -niE '^[[:space:]]*FROM[[:space:]]' <<<"$itext" | tail -1 | cut -d: -f1)
+	stage=$(tail -n +"${last_from:-1}" <<<"$itext")
+	rstage=$(tail -n +"${last_from:-1}" <<<"$rtext")
 	base=$(head -1 <<<"$stage" | awk '{ for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; exit } }')
 	case $base in
 	scratch | *distroless*)
@@ -78,7 +100,7 @@ for f in "${files[@]}"; do
 		continue
 		;;
 	esac
-	run_line=$(grep -nE "$run_re" <<<"$stage" | tail -1 | cut -d: -f1 || true)
+	run_line=$(grep -niE "$run_re" <<<"$stage" | tail -1 | cut -d: -f1 || true)
 	if [ -z "$run_line" ]; then
 		echo "FAIL: $f: the final stage has no 'RUN --mount=type=bind,...,target=/harden sh /harden/harden.sh' with nothing chained after it" >&2
 		fail=1
@@ -87,11 +109,11 @@ for f in "${files[@]}"; do
 	# The mount must be the pinned kit: from=<a stage that is
 	# luthersystems/build-harden pinned by digest>,source=/harden. buildenv
 	# itself mounts its own kit from the build context (--allow-local-kit).
-	opts=$(sed -n "${run_line}p" <<<"$stage" | sed -E 's/^[[:space:]]*RUN[[:space:]]+--mount=([^[:space:]]+).*/\1/')
+	opts=$(sed -n "${run_line}p" <<<"$stage" | sed -E 's/^[[:space:]]*[Rr][Uu][Nn][[:space:]]+--mount=([^[:space:]]+).*/\1/')
 	from=$(tr , '\n' <<<"$opts" | sed -n 's/^from=//p')
 	src=$(tr , '\n' <<<"$opts" | sed -n 's/^source=//p')
 	if [ -n "$from" ]; then
-		if ! grep -qiE "${kit_re}${from}[[:space:]]*\$" <<<"$text" || [ "$src" != /harden ]; then
+		if ! grep -qiE "${kit_re}${from}[[:space:]]*\$" <<<"$itext" || [ "$src" != /harden ]; then
 			echo "FAIL: $f: mount the pinned kit: 'FROM luthersystems/build-harden:<version>@sha256:<digest> AS $from' and 'from=$from,source=/harden'" >&2
 			fail=1
 			continue
@@ -102,15 +124,15 @@ for f in "${files[@]}"; do
 		continue
 	fi
 	after=$(tail -n +"$((run_line + 1))" <<<"$stage")
-	# A CMD, ENTRYPOINT or HEALTHCHECK that names curl or npm runs in the
-	# container, not in the build, so it cannot undo the kit. Every other line
-	# counts, a RUN heredoc's body and a lowercase run included.
-	if grep -viE '^[[:space:]]*(CMD|ENTRYPOINT|HEALTHCHECK|LABEL|EXPOSE|USER|WORKDIR|STOPSIGNAL|VOLUME|ENV|ARG|MAINTAINER)([[:space:]]|$)' <<<"$after" | grep -cE "$pkg_re" | grep -qv '^0$'; then
+	rafter=$(tail -n +"$((run_line + 1))" <<<"$rstage")
+	# Only what runs in the build counts: a CMD or HEALTHCHECK that names
+	# curl or npm runs in the container, and a COPY is checked below.
+	if grep -E "$pkg_re" <<<"$rafter" >/dev/null; then
 		echo "FAIL: $f: a package or install step follows harden.sh" >&2
 		fail=1
 		continue
 	fi
-	if grep -qE "$copy_re" <<<"$after"; then
+	if grep -iE "$copy_re" <<<"$after" >/dev/null; then
 		echo "FAIL: $f: a COPY --from, an ADD or a COPY into a trust store follows harden.sh" >&2
 		fail=1
 		continue
