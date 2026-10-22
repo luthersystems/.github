@@ -124,8 +124,9 @@ scheduled workflows.
 
 With `autofix: true`, a scheduled or manual run of the default branch that
 fails `govulncheck` or `dependencies` starts one more job, `autofix`. Claude
-reads the drift issue and the failed jobs' logs, reproduces each finding with
-the same pinned scanner, and then, for each one:
+reads the drift issue and the failed jobs' logs, reproduces each finding by
+running the gate's own scripts with the scan's inputs, and then, for each
+one:
 
 | Finding | What it does |
 |---|---|
@@ -144,10 +145,22 @@ the same pinned scanner, and then, for each one:
   person; a leaked secret needs rotation, not a commit.
 - **Only on the default branch.** The Bedrock role admits only runs on
   `main`, and a PR's own failures belong to that PR.
+- **It reproduces with the gate, not a plain scan.** A plain
+  `osv-scanner` or `govulncheck ./...` reports what the gate exempts or
+  leaves out, and the agent would fix those. A test fails when the agent's
+  scanner pins differ from the gate's.
+- **Builds and tests run without credentials.** A bump downloads code, and
+  the job holds the OIDC request token, AWS credentials and the deploy
+  key. The agent runs every build and test through `run-untrusted`, which
+  keeps only an allowlist of variables. The App token in the git remote
+  stays readable; it can push a branch but cannot merge past branch
+  protection.
 - **It never changes `security / result`.** The job runs after `result` and
-  is not in its needs. If the agent fails (turn limit, rate limit, timeout),
-  it comments on the drift issue, or opens a `Security auto-fix is failing`
-  issue, so a dead fixer does not look like a quiet one.
+  is not in its needs. If the agent fails (turn limit, rate limit,
+  timeout), it comments on the drift issue, or on one issue labelled
+  `security-autofix-failing` that the next finished run closes, so a dead
+  fixer does not look like a quiet one. It needs `drift-issue: true`, since
+  it reports there.
 - **It inherits its permissions.** A job of a reusable workflow that asks
   for a permission its caller did not grant stops the whole workflow at
   startup, even when the job is skipped (probed on luthersystems/.github#13).
