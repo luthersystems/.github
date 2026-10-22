@@ -23,14 +23,27 @@ name: Release (tag)
 #   v0.012.0 as a module version, so such a tag could never be fetched), is
 #   not tagged yet, and is strictly newer than the latest release tag.
 #
-# Token: the caller's GITHUB_TOKEN creates the tag and the release. A tag
-# created with it triggers no other workflow, so a repo whose tag starts a
-# build (an image, a deploy) cannot use this version yet: those repos cut
-# with the Claude App token today.
+# Token (input release_token):
+# - github (default): the caller's GITHUB_TOKEN creates the tag and the
+#   release. GitHub starts no workflow for an event made with that token, so
+#   use it only in a repo where the tag triggers nothing (a Go library that
+#   consumers fetch by tag).
+# - claude-app: the official Claude App creates the release, so the tag push
+#   starts the repo's own tag workflows (an image build, a deploy). The App
+#   token is only minted by anthropics/claude-code-action, so a Claude run
+#   does the one write. Every check stays in shell, Claude may run only the
+#   one pre-built `gh release create` command (a PreToolUse hook refuses any
+#   other tool call), and a last shell step checks the tag landed on the
+#   validated commit. The model runs on Amazon Bedrock through the AWS role
+#   github-actions-claude-bedrock (luthersystems/common-infrastructure
+#   storage/github_actions_claude_bedrock.tf). Its trust names the CALLING
+#   repo, because a called workflow's OIDC `sub` is the caller's, so each
+#   caller must be on that role's list.
 #
-# Caller contract: the calling job must grant `actions: read` (read the CI
-# runs) and `contents: write` (create the release); a called workflow cannot
-# raise its caller's permissions. In a called workflow the github context is
+# Caller contract: a called workflow cannot raise its caller's token
+# permissions, so the calling job grants `actions: read` (read the CI runs)
+# and `contents: write` (create the release); claude-app also needs
+# `id-token: write` (Bedrock and the App token). In a called workflow the github context is
 # the caller's, so github.repository, github.ref and github.sha below name
 # the calling repo and its dispatch.
 
@@ -51,6 +64,26 @@ on:
         description: "File name of the caller's CI workflow, e.g. svc.yml. It must run on push to main."
         type: string
         required: true
+      ci_wait_minutes:
+        description: "Minutes (at most 30) to wait for a CI push run still in progress on the release commit"
+        type: number
+        required: false
+        default: 15
+      release_token:
+        description: "github (default GITHUB_TOKEN) or claude-app (Claude App token, so the tag triggers workflows)"
+        type: string
+        required: false
+        default: github
+      notes_command:
+        description: "Optional shell command, run in the caller's checkout, whose stdout is the release notes. LAST_TAG holds the previous release tag. Empty = GitHub's generated notes."
+        type: string
+        required: false
+        default: ""
+      runs_on:
+        description: "runs-on for the job, as JSON (a string or a list of labels)"
+        type: string
+        required: false
+        default: '"ubuntu-latest"'
     outputs:
       version:
         description: "The version released (or, on a dry run, the one that would be)"
@@ -59,8 +92,10 @@ on:
 jobs:
   release:
     name: Cut release
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    # Room for the longest CI wait (ci_wait_minutes, at most 30) plus one
+    # Claude run; expressions cannot add, so this is a fixed ceiling.
+    timeout-minutes: 60
     # One release at a time per calling repo. A queued release waits rather
     # than cancels, so two dispatches never race for the same next version.
     concurrency:
@@ -69,6 +104,14 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
+      - name: Check the release mode
+        env:
+          RELEASE_TOKEN: ${{ inputs.release_token }}
+        run: |
+          case "$RELEASE_TOKEN" in
+            github|claude-app) ;;
+            *) echo "error: release_token must be github or claude-app, not '$RELEASE_TOKEN'" >&2; exit 1 ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # all tags, for latest-version detection
@@ -77,6 +120,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CI_WORKFLOW: ${{ inputs.ci_workflow }}
+          CI_WAIT_MINUTES: ${{ inputs.ci_wait_minutes }}
         run: |
           set -euo pipefail
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
@@ -88,14 +132,38 @@ jobs:
             echo "error: run commit $GITHUB_SHA is not live main $live; dispatch again" >&2
             exit 1
           fi
-          # Name the state of the newest push run, so a red main reads as
-          # red, not as "wait": waiting will not fix a failed run.
-          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$CI_WORKFLOW/runs?head_sha=$GITHUB_SHA&event=push" \
-            --jq '[.workflow_runs[] | {status, conclusion, url: .html_url}]')
-          if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")" -lt 1 ]; then
+          # A release is often dispatched right after a merge, while the
+          # merge's CI run is still going, so wait for it rather than make
+          # the operator dispatch again. A failed run fails at once: waiting
+          # will not fix it.
+          if [ "$CI_WAIT_MINUTES" -gt 30 ]; then
+            echo "error: ci_wait_minutes is at most 30 (the job's 60-minute ceiling)" >&2
+            exit 1
+          fi
+          deadline=$(( $(date +%s) + CI_WAIT_MINUTES * 60 ))
+          while :; do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$CI_WORKFLOW/runs?head_sha=$GITHUB_SHA&event=push" \
+              --jq '[.workflow_runs[] | {status, conclusion, url: .html_url}]')
+            if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")" -ge 1 ]; then
+              break
+            fi
             latest_run=$(jq -r 'if length == 0 then "none" else (.[0] | "\(.status) \(.conclusion // "-") \(.url)") end' <<<"$runs")
-            echo "error: no successful push run of $CI_WORKFLOW for $GITHUB_SHA (newest: $latest_run)" >&2
-            echo "error: wait for a run in progress; fix or re-run a failed one" >&2
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
+            if [ "$pending" -eq 0 ] && [ "$(jq length <<<"$runs")" -gt 0 ]; then
+              echo "error: no successful push run of $CI_WORKFLOW for $GITHUB_SHA (newest: $latest_run); fix or re-run it" >&2
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "error: no successful push run of $CI_WORKFLOW for $GITHUB_SHA after ${CI_WAIT_MINUTES}m (newest: $latest_run)" >&2
+              exit 1
+            fi
+            echo "waiting for $CI_WORKFLOW on $GITHUB_SHA (newest: $latest_run)"
+            sleep 20
+          done
+          # Main can move during the wait; tag only what is still main.
+          live=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$live" != "$GITHUB_SHA" ]; then
+            echo "error: main moved to $live during the CI wait; dispatch again" >&2
             exit 1
           fi
           echo "commit $GITHUB_SHA is live main and $CI_WORKFLOW passed"
@@ -141,22 +209,141 @@ jobs:
             fi
           fi
           echo "computed version: $version (latest existing: ${latest:-none})"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "latest=$latest"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build the release command
+        id: cmd
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          LAST_TAG: ${{ steps.ver.outputs.latest }}
+          NOTES_COMMAND: ${{ inputs.notes_command }}
+        run: |
+          set -euo pipefail
+          notes_args="--generate-notes"
+          if [ -n "$NOTES_COMMAND" ]; then
+            notes_path="$RUNNER_TEMP/release-notes.md"
+            # The caller's own command in the caller's own checkout: it is
+            # repo configuration, not dispatch input.
+            LAST_TAG="$LAST_TAG" bash -c "$NOTES_COMMAND" > "$notes_path"
+            notes_args="--notes-file $notes_path"
+          fi
+          # Every value here is a validated version, a 40-hex SHA, the repo
+          # name or a runner path, so the command needs no quoting; the
+          # claude-app hook compares Claude's command to this exact string.
+          cmd="gh release create $VERSION --repo $GITHUB_REPOSITORY --title $VERSION --target $GITHUB_SHA $notes_args"
+          [[ "$cmd" =~ ^[A-Za-z0-9_./:\ -]+$ ]] || { echo "error: unsafe release command: $cmd" >&2; exit 1; }
+          printf '%s' "$cmd" > "$RUNNER_TEMP/release-command.txt"
+          chmod 400 "$RUNNER_TEMP/release-command.txt"
+          echo "command=$cmd" >> "$GITHUB_OUTPUT"
       - name: Dry run — print only
         if: ${{ inputs.dry_run }}
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: echo "DRY RUN — would release $VERSION from $GITHUB_SHA; nothing created."
+          CMD: ${{ steps.cmd.outputs.command }}
+        run: |
+          echo "DRY RUN — would run: $CMD"
+          if [ -f "$RUNNER_TEMP/release-notes.md" ]; then
+            # Stop workflow commands so notes text cannot act as one.
+            token=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+            echo "::stop-commands::$token"
+            cat "$RUNNER_TEMP/release-notes.md"
+            echo "::$token::"
+          fi
       - name: Cut release
+        if: ${{ !inputs.dry_run && inputs.release_token == 'github' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash -c "$(cat "$RUNNER_TEMP/release-command.txt")"
+      # claude-code-action@v1 bundles a Claude Code CLI that can lag the
+      # pinned model: claude-opus-5-5 needs >= 2.1.280 (elps run
+      # 35825136056 failed with claude_code_version_too_old). Bump with the
+      # model pin.
+      - name: Install pinned Claude Code CLI
+        id: claude_cli
+        if: ${{ !inputs.dry_run && inputs.release_token == 'claude-app' }}
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.280
+          echo "path=$(command -v claude)" >> "$GITHUB_OUTPUT"
+      - name: Configure AWS credentials for Bedrock (OIDC)
+        if: ${{ !inputs.dry_run && inputs.release_token == 'claude-app' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::637423319757:role/github-actions-claude-bedrock
+          aws-region: us-west-2
+      - name: Install exact-command guard
+        id: guard
+        if: ${{ !inputs.dry_run && inputs.release_token == 'claude-app' }}
+        run: |
+          set -euo pipefail
+          hook_path="$RUNNER_TEMP/release-tool-guard.py"
+          cat > "$hook_path" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          try:
+              expected = Path(__file__).with_name("release-command.txt").read_text()
+              payload = json.load(sys.stdin)
+              permitted = (
+                  bool(expected) and isinstance(payload, dict) and
+                  payload.get("tool_name") == "Bash" and
+                  isinstance(payload.get("tool_input"), dict) and
+                  payload["tool_input"].get("command") == expected
+              )
+          except (OSError, ValueError, TypeError, RecursionError):
+              permitted = False
+          if not permitted:
+              print("Deny: only Bash with the exact validated release command is permitted.", file=sys.stderr)
+              sys.exit(2)
+          PY
+          chmod 500 "$hook_path"
+          settings=$(jq -cn --arg command "python3 -I $hook_path || exit 2" '{
+            includeGitInstructions: false,
+            hooks: {PreToolUse: [{matcher: "*", hooks: [{type: "command", command: $command}]}]}
+          }')
+          echo "settings=$settings" >> "$GITHUB_OUTPUT"
+          cmd=$(cat "$RUNNER_TEMP/release-command.txt")
+          echo "claude_args=--tools Bash --allowedTools 'Bash($cmd)' --disallowedTools Read,Grep,Glob,LS,Edit,Write,WebFetch,WebSearch,Task --max-turns 10 --model us.anthropic.claude-opus-5-5 --fallback-model us.anthropic.claude-sonnet-5-5" >> "$GITHUB_OUTPUT"
+      - name: Cut the release via Claude
+        if: ${{ !inputs.dry_run && inputs.release_token == 'claude-app' }}
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
+        with:
+          # Official App auth, minted through OIDC (`id-token: write`). Do not
+          # set github_token: a GITHUB_TOKEN tag would start no workflow.
+          use_bedrock: "true"
+          path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
+          settings: ${{ steps.guard.outputs.settings }}
+          prompt: |
+            Cut a release of ${{ github.repository }}. The version, the main
+            commit and CI were validated by trusted shell steps.
+            Run exactly this command once, with no changes:
+            ${{ steps.cmd.outputs.command }}
+            Run no other commands and do not change any files or branches.
+          claude_args: ${{ steps.guard.outputs.claude_args }}
+      - name: Verify release and tag target
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "$VERSION" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$VERSION" \
-            --target "$GITHUB_SHA" \
-            --generate-notes
-          echo "released $VERSION at $GITHUB_SHA"
+          fail() { echo "error: $*" >&2; exit 1; }
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft \
+            | jq -e --arg v "$VERSION" '.tagName == $v and .isDraft == false' >/dev/null \
+            || fail "release $VERSION is missing or a draft"
+          object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object)
+          # Peel annotated tags to the commit they name.
+          for _ in $(seq 10); do
+            type=$(jq -r .type <<<"$object"); sha=$(jq -r .sha <<<"$object")
+            if [ "$type" = commit ]; then
+              [ "$sha" = "$GITHUB_SHA" ] || fail "tag $VERSION points at $sha, not $GITHUB_SHA"
+              echo "released $VERSION at $GITHUB_SHA"
+              exit 0
+            fi
+            [ "$type" = tag ] || fail "tag $VERSION does not resolve to a commit"
+            object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .object)
+          done
+          fail "tag $VERSION nests too deeply"
