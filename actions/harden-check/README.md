@@ -3,7 +3,9 @@
 A composite action that proves, in CI, that an image holds the build-harden
 policy of [luthersystems/buildenv](https://github.com/luthersystems/buildenv)
 (`images/harden`): no listed CA (the emSign roots, the eMudhra intermediates
-and Comodo AAA, which cross-signs them) is trusted anywhere in the image.
+and Comodo AAA, which cross-signs them) is trusted anywhere in the image, and
+each CA the policy keeps (USERTrust, which today's Sectigo chains end at) is
+still trusted.
 
 ## Why it exists
 
@@ -20,6 +22,7 @@ kit release and no PR per repo.
 |---|---|---|
 | Harden step (`harden.sh`) | The kit image, `luthersystems/build-harden`, run in each Dockerfile | An action cannot run inside `docker build`. |
 | Policy (the listed certificates) | The kit image | The check reads the policy of the kit the caller pins, so it checks the same list that `harden.sh` applied. |
+| Kept CAs (`ca-keep.list`, the positive control) | The kit image, and a copy in `check/keep/` | The check uses the kit's list. A kit of v0.1.47 or older has none, so the check uses the action's copy: every repo on `@v1` gets the check without a kit bump. |
 | Checks (`check/dockerfile.sh`, `check/image.sh`) and the CI glue | This action | One copy, one version for every repo. |
 
 ## Use
@@ -57,6 +60,25 @@ daemon (for example `docker buildx build --load`) or pullable. The check
 exports the image's file system and runs every check on the host, so an image
 of another architecture needs no emulation.
 
+## The positive control
+
+The checks of the listed CAs prove that they fail. A store emptied or stripped
+too far passes those checks too, so they alone cannot tell a correct block
+from one that breaks every TLS call. So the check also proves that:
+
+- each kept intermediate (a Sectigo CA under USERTrust RSA or ECC) verifies
+  against each PEM file with 100 or more certificates (the system bundle,
+  certifi) and the file that `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE` names.
+  Go, Node.js (with `--use-openssl-ca`), uv, requests, curl and git read
+  these files;
+- each kept root is in each Java keystore, and no `blocked.certs` blocks a
+  kept CA;
+- no NSS database distrusts a kept CA, or a certificate with its key.
+
+A failure names the store and the CA. Find the step that removed it (a
+stripped bundle, a later `update-ca-certificates` with a custom list), or
+`allow` a file that is not a public trust store.
+
 ## Versions
 
 Pin `@v1`. `v1` moves to each compatible release (`v1.MINOR.PATCH`); a change
@@ -69,5 +91,7 @@ a plain Alpine image fails, and fixtures in `tests/harden-check` cover an NSS
 database that holds a listed certificate under another nickname, and a
 chromedp `headless-shell` binary (both from luthersystems/buildenv#165), and a Debian JDK whose
 blocked.certs is a link (luthersystems/buildenv#166).
-The `same-kit` fixtures cover a file that pins the kit checked (passes),
+The `keep-removed` fixture loses USERTrust RSA after the kit, so the
+positive control must fail (it also tests the action's copy of the list,
+since the fixture's kit has none). The `same-kit` fixtures cover a file that pins the kit checked (passes),
 another kit and no kit (both fail).
