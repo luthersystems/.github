@@ -153,9 +153,10 @@ chmod -R u+rwX "$root"
 
 
 # is_binary FILE: FILE holds a NUL byte.
-# The read stops at the first NUL, so a large binary is not read in full,
-# and a NUL anywhere counts, as in the DER search below.
-is_binary() { [ "$(tr -dc '\000' <"$1" | head -c 1 | wc -c)" -gt 0 ]; }
+# The read stops at the first NUL and after 16 MiB, so a large file is not
+# read in full. A binary whose first NUL is later is read as text, which can
+# only make the check stricter (a PEM scan fails, a binary only warns).
+is_binary() { [ "$(head -c 16777216 "$1" | tr -dc '\000' | head -c 1 | wc -c)" -gt 0 ]; }
 
 # in_root PATH: the file PATH names in the image, with every link resolved
 # inside the image root. A plain test of "$root$PATH" would follow an absolute
@@ -389,6 +390,16 @@ while IFS= read -r -d '' jks; do
 	seen_blocked[$bc]=1
 	check_blocked "$bc" "${bc#"$root"}"
 done < <(find "$root" -path '*/lib/security/cacerts' \( -type f -o -type l \) -print0 2>/dev/null)
+# Every other JDK blocked.certs too (a JDK with no cacerts of its own reads a
+# trust store given at run time).
+while IFS= read -r -d '' b; do
+	p=${b#"$root"}
+	allowed "$p" && continue
+	bc=$(in_root "$p") || { bad "$p: a link to no file"; continue; }
+	[ -z "${seen_blocked[$bc]:-}" ] || continue
+	seen_blocked[$bc]=1
+	check_blocked "$bc" "${bc#"$root"}"
+done < <(find "$root" -path '*/lib/security/blocked.certs' \( -type f -o -type l \) -print0 2>/dev/null)
 
 # NSS.
 find "$root" -type f \( -name cert9.db -o -name cert8.db \) -print0 2>/dev/null >"$work/nss" || true

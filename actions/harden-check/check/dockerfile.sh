@@ -69,30 +69,12 @@ for f in "${files[@]}"; do
 		grep -iE "$kit_re" <<<"$text" | awk '{ for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; break } }' || true
 		continue
 	fi
-	# Tag each line: I an instruction, R the body of a RUN heredoc, B the
-	# body of another heredoc (COPY <<EOF). A heredoc body is not an
-	# instruction (a line "FROM x" in it starts no stage), but a RUN
-	# heredoc's body runs in the build, so its package steps count.
-	tagged=$(awk -v q="'" '
-		hd != "" { print (hrun ? "R" : "B") $0; t = $0; sub(/^\t+/, "", t); if (t == hd) hd = ""; next }
-		{
-			print "I" $0
-			re = "(^|[^<])<<-?[ \t]*[\"" q "]?[A-Za-z_][A-Za-z0-9_]*"
-			if (match($0, re)) {
-				w = substr($0, RSTART, RLENGTH)
-				sub("^[^<]?<<-?[ \t]*[\"" q "]?", "", w)
-				hd = w
-				hrun = (tolower($1) == "run")
-			}
-		}' <<<"$text")
-	# Two views with the same line numbers: the instructions only, and the
-	# lines that run in the build (RUN instructions and RUN heredoc bodies).
-	itext=$(sed -E 's/^I//; t; s/.*//' <<<"$tagged")
-	rtext=$(awk '/^R/ || (/^I/ && tolower(substr($1, 2)) == "run") { print substr($0, 2); next } { print "" }' <<<"$tagged")
 	# Instructions are not case-sensitive: "from" starts a stage too.
-	last_from=$(grep -niE '^[[:space:]]*FROM[[:space:]]' <<<"$itext" | tail -1 | cut -d: -f1)
-	stage=$(tail -n +"${last_from:-1}" <<<"$itext")
-	rstage=$(tail -n +"${last_from:-1}" <<<"$rtext")
+	# The check does not parse heredocs (RUN <<EOF): each line of a body is
+	# read as if it were an instruction. So it can fail a safe Dockerfile
+	# (a COPY heredoc whose text names npm), but never pass an unsafe one.
+	last_from=$(grep -niE '^[[:space:]]*FROM[[:space:]]' <<<"$text" | tail -1 | cut -d: -f1)
+	stage=$(tail -n +"${last_from:-1}" <<<"$text")
 	base=$(head -1 <<<"$stage" | awk '{ for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; exit } }')
 	case $base in
 	scratch | *distroless*)
@@ -113,7 +95,7 @@ for f in "${files[@]}"; do
 	from=$(tr , '\n' <<<"$opts" | sed -n 's/^from=//p')
 	src=$(tr , '\n' <<<"$opts" | sed -n 's/^source=//p')
 	if [ -n "$from" ]; then
-		if ! grep -qiE "${kit_re}${from}[[:space:]]*\$" <<<"$itext" || [ "$src" != /harden ]; then
+		if ! grep -qiE "${kit_re}${from}[[:space:]]*\$" <<<"$text" || [ "$src" != /harden ]; then
 			echo "FAIL: $f: mount the pinned kit: 'FROM luthersystems/build-harden:<version>@sha256:<digest> AS $from' and 'from=$from,source=/harden'" >&2
 			fail=1
 			continue
@@ -124,10 +106,10 @@ for f in "${files[@]}"; do
 		continue
 	fi
 	after=$(tail -n +"$((run_line + 1))" <<<"$stage")
-	rafter=$(tail -n +"$((run_line + 1))" <<<"$rstage")
-	# Only what runs in the build counts: a CMD or HEALTHCHECK that names
-	# curl or npm runs in the container, and a COPY is checked below.
-	if grep -E "$pkg_re" <<<"$rafter" >/dev/null; then
+	# Every line counts but the instructions that run nothing in the build:
+	# a CMD or HEALTHCHECK that names curl or npm runs in the container, and
+	# a COPY is checked below. A RUN heredoc's body lines count.
+	if grep -viE '^[[:space:]]*(CMD|ENTRYPOINT|HEALTHCHECK|LABEL|EXPOSE|USER|WORKDIR|STOPSIGNAL|VOLUME|MAINTAINER|COPY)([[:space:]]|$)' <<<"$after" | grep -E "$pkg_re" >/dev/null; then
 		echo "FAIL: $f: a package or install step follows harden.sh" >&2
 		fail=1
 		continue
