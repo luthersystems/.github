@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Runs gosec, through golangci-lint, on each Go module. Why through
+# golangci-lint: see action.yml.
+#
+# Env: DIRS (space separated; empty = every go.mod). golangci-lint must be
+# on PATH.
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dirs="${DIRS:-$("$here/../security-detect/find-go-modules.sh")}"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
+failed=0
+for d in $dirs; do
+  echo "::group::gosec $d"
+  status=0
+  (cd "$d" && golangci-lint run --enable-only gosec --max-issues-per-linter 0 --max-same-issues 0 ./...) 2>&1 || status=$?
+  echo "::endgroup::"
+  if [ "$status" -ne 0 ]; then
+    echo "::error title=gosec::gosec found issues (or could not type-check the code) in $d"
+    failed=1
+  fi
+done
+exit "$failed"

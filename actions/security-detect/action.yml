@@ -1,0 +1,45 @@
+name: security detect
+description: Find what the security workflow should scan in this repo.
+
+# Why a separate step: the workflow skips the Go jobs in a repo with no Go
+# module, and reports them as skipped rather than as a failed setup. A skipped
+# job counts as passed for a required check, so one workflow fits every repo.
+
+inputs:
+  go-directories:
+    description: Module directories to scan, space separated. Empty means detect.
+    required: false
+    default: ""
+outputs:
+  go-directories:
+    description: Module directories, space separated (empty when none).
+    value: ${{ steps.find.outputs.go-directories }}
+  go-version-file:
+    description: The go.mod that asks for the newest Go (toolchain line, else go line), so every module builds.
+    value: ${{ steps.find.outputs.go-version-file }}
+
+runs:
+  using: composite
+  steps:
+    - id: find
+      shell: bash
+      env:
+        GIVEN: ${{ inputs.go-directories }}
+      run: |
+        set -euo pipefail
+        dirs="${GIVEN:-$("$GITHUB_ACTION_PATH/find-go-modules.sh" | tr '\n' ' ')}"
+        dirs="$(echo "$dirs" | xargs)"
+        echo "go-directories=$dirs" >>"$GITHUB_OUTPUT"
+        # One Go for every module: the newest any go.mod asks for. A module
+        # that asks for an older Go builds with a newer one; the reverse
+        # fails (go refuses a go.mod newer than itself, or must download a
+        # toolchain on every run).
+        best="" bestv=""
+        for d in $dirs; do
+          v="$(awk '$1=="toolchain"{sub(/^go/,"",$2); t=$2} $1=="go"{g=$2} END{print (t?t:g)}' "$d/go.mod")"
+          if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$bestv" "$v" | sort -V | tail -1)" = "$v" ] && [ "$v" != "$bestv" ]; then
+            best="$d/go.mod" bestv="$v"
+          fi
+        done
+        echo "go-version-file=$best" >>"$GITHUB_OUTPUT"
+        echo "Go modules: ${dirs:-none}"

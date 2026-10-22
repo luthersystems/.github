@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Installs a pinned Go tool into a cache directory and puts it on PATH.
+#
+# Why go install: it checks the module against the Go checksum database, so
+# the binary is built from the reviewed release, the same guarantee a pinned
+# checksum gives. Why a cache: building golangci-lint or osv-scanner takes
+# minutes, and every job of every PR in every repo would pay that. The action
+# that calls this restores DIR from the Actions cache, keyed on the tool and
+# its version, so a repo builds each version once.
+#
+# Usage: go-install.sh DIR MODULE@VERSION BINARY
+set -euo pipefail
+
+dir="$1" mod="$2" bin="$3"
+mkdir -p "$dir"
+if [ ! -x "$dir/$bin" ]; then
+  GOTOOLCHAIN=auto GOBIN="$dir" go install "$mod"
+fi
+echo "$dir" >>"${GITHUB_PATH:-/dev/null}"

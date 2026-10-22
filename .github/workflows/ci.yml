@@ -98,3 +98,57 @@ jobs:
 
       - name: "Fail: the failing cases fail, for the right reason"
         run: bash tests/harden-check/expect-fail.sh
+
+  # The security workflow's actions, run as a caller runs them (uses:
+  # ./actions/...) on inputs that must pass, which also installs each pinned
+  # tool. Then the test script runs every check on inputs that must fail, and
+  # asserts the reason, so a check that passes everything cannot pass here.
+  # The workflow itself (security.yml) calls the actions at @v1, so it is
+  # tested through its callers once a release moves v1.
+  security-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans this PR's commits
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+
+      - name: "Detect: test fixtures are not modules to scan"
+        id: detect
+        uses: ./actions/security-detect
+      - name: Check the detected modules
+        env:
+          DIRS: ${{ steps.detect.outputs.go-directories }}
+        run: |
+          if [ -n "$DIRS" ]; then
+            echo "::error::detect found modules under testdata: $DIRS"
+            exit 1
+          fi
+
+      - name: "Pass: govulncheck on a clean module"
+        uses: ./actions/govulncheck
+        with:
+          directories: tests/security/testdata/go-clean
+          binary: "true"
+      - name: "Pass: gosec on a clean module"
+        uses: ./actions/gosec
+        with:
+          directories: tests/security/testdata/go-clean
+      - name: "Pass: gitleaks on this change"
+        uses: ./actions/gitleaks
+      - name: "Pass: osv-scanner on this repo, fixtures left out"
+        uses: ./actions/osv-scan
+        with:
+          exclude: tests
+
+      - name: Fail and pass cases of each check
+        run: bash tests/security/security-test.sh
+      - name: Drift issue cases
+        run: node tests/security/drift-test.cjs
+      - name: osv gate version and fix cases
+        run: python3 tests/security/osv_gate_test.py

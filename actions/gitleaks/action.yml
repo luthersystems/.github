@@ -1,0 +1,36 @@
+name: gitleaks
+description: Fail when a commit or file holds a secret (API key, private key, token).
+
+# Why: see gitleaks.sh. Needs Go on PATH to install gitleaks, and a checkout
+# with the history of the scanned range (fetch-depth: 0).
+
+inputs:
+  version:
+    description: gitleaks version. Pinned so a release cannot change a result with no change in the repo.
+    required: false
+    default: v8.30.1
+
+runs:
+  using: composite
+  steps:
+    # Restores the binary this repo built for this version, if any (see
+    # lib/go-install.sh for why a cache and why go install).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/gitleaks-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-gitleaks-${{ inputs.version }}
+    - name: Install gitleaks
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        DIR: ${{ runner.temp }}/luther-tools/gitleaks-${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/zricethezav/gitleaks/v8@${VERSION}" gitleaks
+    - name: Run gitleaks
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE: ${{ github.event.pull_request.base.sha }}
+        HEAD: ${{ github.event.pull_request.head.sha }}
+        BEFORE: ${{ github.event.before }}
+        AFTER: ${{ github.event.after }}
+      run: bash "$GITHUB_ACTION_PATH/gitleaks.sh"

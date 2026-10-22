@@ -1,0 +1,47 @@
+name: gosec
+description: >-
+  Run gosec, through golangci-lint and the repo's own .golangci.yml, on each
+  Go module.
+
+# Why through golangci-lint and not the gosec binary: 17 repos already run
+# gosec as a golangci-lint linter, with exclusions they have reviewed in
+# .golangci.yml. golangci-lint --enable-only gosec reads that same file, so
+# this check reports what the repo's own lint reports for gosec, no more, and
+# a repo that has no gosec in its lint gets gosec with the defaults.
+#
+# Needs: Go on PATH, set up from the repo's go.mod (gosec type-checks the
+# code), and access to private modules when the repo has any.
+
+inputs:
+  directories:
+    description: Module directories, space separated. Empty means every go.mod outside vendor/, testdata/ and node_modules/.
+    required: false
+    default: ""
+  version:
+    description: >-
+      golangci-lint version. Pinned so a release cannot change a result with
+      no change in the repo. It must read the export data of the newest Go a
+      repo uses: v2.13.2 cannot type-check with Go 1.27, v2.15.0 can.
+    required: false
+    default: v2.15.0
+
+runs:
+  using: composite
+  steps:
+    # Restores the binary this repo built for this version, if any (see
+    # lib/go-install.sh for why a cache and why go install).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/golangci-lint-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-golangci-lint-${{ inputs.version }}
+    - name: Install golangci-lint
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        DIR: ${{ runner.temp }}/luther-tools/golangci-lint-${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${VERSION}" golangci-lint
+    - name: Run gosec
+      shell: bash
+      env:
+        DIRS: ${{ inputs.directories }}
+      run: bash "$GITHUB_ACTION_PATH/gosec.sh"
