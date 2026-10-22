@@ -1,0 +1,49 @@
+name: PR base commit
+description: >-
+  Print the commit a pull request's merge commit was built on, so a check that
+  compares the base with the PR compares exactly the PR's diff.
+
+# Why: on a pull_request event, actions/checkout checks out
+# refs/pull/<N>/merge, the PR head merged into the CURRENT base branch tip.
+# pull_request.base.sha is the base tip at the last push. Once the base branch
+# moves, a check that compares base.sha with the merge commit charges the base
+# branch's new commits to the PR: false benchmark regressions, and false API
+# breaks. The merge commit's first parent is the base tip it was built on.
+# This is substrate#654, shared so the benchmark and API break gates use one
+# rule.
+#
+# Needs: the merge commit checked out in `directory` (a depth-1 checkout is
+# enough; the parents are read from the commit object, with no fetch).
+
+inputs:
+  directory:
+    description: The checkout of the PR merge commit.
+    required: false
+    default: "."
+  head-sha:
+    description: The PR head commit.
+    required: false
+    default: ${{ github.event.pull_request.head.sha }}
+  fallback-sha:
+    description: Used when the checkout is not a merge of the PR head (for example, a PR with a merge conflict).
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+
+outputs:
+  sha:
+    description: The base commit.
+    value: ${{ steps.base.outputs.sha }}
+  source:
+    description: merge-parent, or fallback when the fallback SHA was used.
+    value: ${{ steps.base.outputs.source }}
+
+runs:
+  using: composite
+  steps:
+    - id: base
+      shell: bash
+      env:
+        DIR: ${{ inputs.directory }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        FALLBACK_SHA: ${{ inputs.fallback-sha }}
+      run: bash "$GITHUB_ACTION_PATH/pr-base.sh" "$DIR" "$HEAD_SHA" "$FALLBACK_SHA"
