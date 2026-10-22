@@ -1,0 +1,43 @@
+name: Security (this repo)
+
+# This repo's own run of the shared security checks, so the org ruleset's
+# required check, "security / result", exists here too.
+#
+# Why a separate file: security.yml in this repo IS the reusable workflow
+# that every other repo calls with @v1. This caller once replaced it (720a462),
+# and v1.4.0 then pointed every caller at a workflow with no workflow_call:
+# all 48 callers failed at startup. ci.yml now checks that each reusable
+# workflow keeps its workflow_call trigger.
+#
+# Why a local path, not @v1: a PR here tests the workflow it changes, before
+# a release moves v1 for every caller.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # A scheduled run finds advisories published after the last change, and
+    # opens a security-drift issue when one appears.
+    # Nightly: this repo is public, so Actions minutes are free.
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-self-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The job id must stay "security": the ruleset requires "security / result".
+  security:
+    permissions:
+      contents: read
+      issues: write # the security-drift issue on scheduled runs
+    uses: ./.github/workflows/security.yml
+    with:
+      # tests/security/testdata holds lockfiles that are vulnerable on
+      # purpose, to test the checks; they are not dependencies of anything.
+      osv-exclude: tests
