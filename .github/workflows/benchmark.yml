@@ -1,0 +1,286 @@
+name: Benchmark
+
+# The benchmark regression gate, as one reusable workflow.
+#
+# Why it exists: elps and substrate each ran their own copy, about 600 lines
+# of workflow and scripts each. The judge was already shared (elps's
+# cmd/benchgate, which replaced two diverged awk copies, elps#538), but the
+# run, the checks around it and the PR comment were not, so every fix was
+# written twice or not at all. This workflow runs one copy of them, and a
+# repo with benchmarks (svc, libmxf) gets the gate with one caller file.
+#
+# How it measures (each action explains its choices):
+#   * Both arms, the PR's base and the PR, are checked out, built and
+#     measured in ONE job on ONE runner, interleaved round by round. The
+#     verdict compares the two arms with each other, never with a stored
+#     number, so a runner change cannot leak into it.
+#   * The base arm is the first parent of the PR merge commit, so the arms
+#     differ by exactly the PR's diff (actions/pr-base, substrate#654).
+#   * benchgate decides: a statistically significant move in the bad
+#     direction, at or above the threshold for that metric class, fails.
+#     A row the runner could not measure is reported as such (exit 3), not
+#     as a pass or a regression.
+#
+# Exceptions: a reviewed row in the waivers file (default
+# .github/quality/benchstat-waivers.txt), with an issue, a ceiling and an
+# expiry. A waived row is still measured, still reported in the PR comment,
+# and still fails if it grows past its ceiling. There is no label or commit
+# trailer that skips the gate: a decision to accept a regression must stay
+# in the repo's history.
+#
+# The one check to require is "benchmark / result". It passes when the gate
+# passed, or when it did not need to run: not a pull request, or a PR that
+# changes only paths that skip-paths matches (docs). See
+# docs/benchmark-workflow.md for the caller and the inputs.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: >-
+          Runner for the benchmark job: a label or a JSON array of labels.
+          Pick one fixed runner class; ARM by default, because the services
+          ship on ARM.
+        type: string
+        required: false
+        default: ubuntu-24.04-arm
+      timeout-minutes:
+        description: Bound for the benchmark job. It stops a hang; it does not police benchmark time.
+        type: number
+        required: false
+        default: 45
+      skip-paths:
+        description: >-
+          Extended regex. When every file the PR changes matches it, the
+          benchmark job is skipped (it counts as passed). Empty means never
+          skip.
+        type: string
+        required: false
+        default: '(^docs/|\.md$)'
+      go-version-file:
+        description: The go.mod, relative to the repo root, whose Go builds both arms (read from the PR arm).
+        type: string
+        required: false
+        default: go.mod
+      go-cache:
+        description: Restore the setup-go module cache. Turn off on self-hosted runners that keep a module cache of their own.
+        type: boolean
+        required: false
+        default: true
+      lfs:
+        description: Check out Git LFS files in both arms.
+        type: boolean
+        required: false
+        default: false
+      packages:
+        description: Packages to benchmark.
+        type: string
+        required: false
+        default: ./...
+      bench:
+        description: go test -bench regex.
+        type: string
+        required: false
+        default: .
+      skip:
+        description: go test -skip regex (elps skips its RunParallel benchmarks, named *Parallel).
+        type: string
+        required: false
+        default: ""
+      benchtime:
+        description: go test -benchtime.
+        type: string
+        required: false
+        default: 100ms
+      count:
+        description: Interleaved rounds; each gives one sample per arm.
+        type: number
+        required: false
+        default: 10
+      timeout:
+        description: go test -timeout, per arm per round.
+        type: string
+        required: false
+        default: 15m
+      gomaxprocs:
+        description: GOMAXPROCS for the benchmark runs. Pinned so the benchmark name suffix cannot move with the runner (elps#767).
+        type: string
+        required: false
+        default: "1"
+      env:
+        description: KEY=VALUE lines set for each arm's go test. ${ARM_DIR} in a value becomes that arm's directory.
+        type: string
+        required: false
+        default: ""
+      prepare:
+        description: A shell command run once in each arm before measuring (for example, a build the benchmarks need), with ARM_DIR set.
+        type: string
+        required: false
+        default: ""
+      allow-build-failures:
+        description: Allow packages that do not build, when they carry no benchmarks.
+        type: boolean
+        required: false
+        default: false
+      waivers:
+        description: The benchmark waivers file, relative to the repo root (read from the PR arm). A missing file means no waivers.
+        type: string
+        required: false
+        default: .github/quality/benchstat-waivers.txt
+      threshold:
+        description: Timing regression gate, percent. Empty means benchgate's default.
+        type: string
+        required: false
+        default: ""
+      alloc-threshold:
+        description: Allocation regression gate, percent. Empty means benchgate's default.
+        type: string
+        required: false
+        default: ""
+      variance-ceiling:
+        description: Per-row confidence interval ceiling, percent. Empty means benchgate's default.
+        type: string
+        required: false
+        default: ""
+      alpha:
+        description: Significance level. Empty means benchgate's default.
+        type: string
+        required: false
+        default: ""
+      benchgate-version:
+        description: Version of luthersystems/elps cmd/benchgate, the judge.
+        type: string
+        required: false
+        default: v1.85.0
+      comment:
+        description: Post the comparison as one PR comment, updated on each push.
+        type: boolean
+        required: false
+        default: true
+      goprivate:
+        description: GOPRIVATE. The modules it names are fetched over SSH with the SSH_PRIVATE_KEY secret.
+        type: string
+        required: false
+        default: github.com/luthersystems/license
+    secrets:
+      SSH_PRIVATE_KEY:
+        description: SSH key that can read the private Go modules in goprivate. Needed only by repos that import one.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Docs-only PRs skip the measurement, and the required check still
+  # reports: a workflow-level paths filter would leave "benchmark / result"
+  # missing, and a missing required check blocks the merge.
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.classify.outputs.skip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2 # the merge commit and both parents
+          persist-credentials: false
+      - id: classify
+        env:
+          SKIP_PATHS: ${{ inputs.skip-paths }}
+        run: |
+          set -euo pipefail
+          # Fail open to "measure": an error here must never skip the gate.
+          skip=false
+          if [ -n "$SKIP_PATHS" ] && files="$(git diff --name-only HEAD^1 HEAD 2>/dev/null)" && [ -n "$files" ]; then
+            if ! grep -qvE "$SKIP_PATHS" <<<"$files"; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >>"$GITHUB_OUTPUT"
+          echo "Changed files match skip-paths only: $skip"
+
+  benchmark:
+    needs: changes
+    if: needs.changes.outputs.skip != 'true'
+    runs-on: ${{ fromJSON(startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: write # the PR comment
+    steps:
+      - name: Check out the PR
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pr
+          lfs: ${{ inputs.lfs }}
+          persist-credentials: false
+      - id: base
+        uses: luthersystems/.github/actions/pr-base@v1
+        with:
+          directory: pr
+      - name: Check out the base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          path: base
+          lfs: ${{ inputs.lfs }}
+          persist-credentials: false
+      - uses: luthersystems/.github/actions/go-private-modules@v1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          goprivate: ${{ inputs.goprivate }}
+      # Both arms build with the PR arm's Go, so the toolchain is not part of
+      # the difference.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: pr/${{ inputs.go-version-file }}
+          cache: ${{ inputs.go-cache }}
+          cache-dependency-path: pr/**/go.sum
+      - uses: luthersystems/.github/actions/benchmark-run@v1
+        with:
+          packages: ${{ inputs.packages }}
+          bench: ${{ inputs.bench }}
+          skip: ${{ inputs.skip }}
+          benchtime: ${{ inputs.benchtime }}
+          count: ${{ inputs.count }}
+          timeout: ${{ inputs.timeout }}
+          gomaxprocs: ${{ inputs.gomaxprocs }}
+          env: ${{ inputs.env }}
+          prepare: ${{ inputs.prepare }}
+          allow-build-failures: ${{ inputs.allow-build-failures }}
+      # Also after a failed measurement, so the PR comment names the cause.
+      - uses: luthersystems/.github/actions/benchmark-gate@v1
+        if: ${{ !cancelled() }}
+        with:
+          base-sha: ${{ steps.base.outputs.sha }}
+          base-source: ${{ steps.base.outputs.source }}
+          waivers: ${{ inputs.waivers }}
+          threshold: ${{ inputs.threshold }}
+          alloc-threshold: ${{ inputs.alloc-threshold }}
+          variance-ceiling: ${{ inputs.variance-ceiling }}
+          alpha: ${{ inputs.alpha }}
+          benchgate-version: ${{ inputs.benchgate-version }}
+          comment: ${{ inputs.comment }}
+          count: ${{ inputs.count }}
+
+  # The one check a ruleset requires. It runs even when a job failed or was
+  # skipped, and passes only when every job passed or did not need to run.
+  result:
+    needs: [changes, benchmark]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Sum up the jobs
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          results="$(jq -c 'with_entries(.value = .value.result)' <<<"$NEEDS")"
+          echo "$results" | jq -r 'to_entries[] | "\(.key): \(.value)"'
+          bad="$(jq -r '[to_entries[] | select(.value != "success" and .value != "skipped") | .key] | join(" ")' <<<"$results")"
+          if [ -n "$bad" ]; then
+            echo "::error title=Benchmark gate failed::$bad. Open the benchmark job's log and the PR comment."
+            exit 1
+          fi
