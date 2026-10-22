@@ -70,6 +70,7 @@ jobs:
           set -euo pipefail
           docker build -q -t harden-check-test/nss-other-nickname tests/harden-check/nss-other-nickname
           docker build -q -t harden-check-test/chrome-no-nssdb tests/harden-check/chrome-no-nssdb
+          docker build -q -t harden-check-test/debian-jdk tests/harden-check/debian-jdk
 
       # buildenv#165: a listed certificate under another nickname, and a
       # headless-shell binary with an NSS database. The kit is read from the
@@ -79,6 +80,12 @@ jobs:
         with:
           dockerfiles: tests/harden-check/nss-other-nickname/Dockerfile
           images: harden-check-test/nss-other-nickname ${{ runner.arch == 'ARM64' && 'linux/arm64' || 'linux/amd64' }}
+
+      - name: "Pass: a Debian JDK whose keystore and blocked.certs are links"
+        uses: ./actions/harden-check
+        with:
+          dockerfiles: tests/harden-check/debian-jdk
+          images: harden-check-test/debian-jdk
 
       - name: Dockerfile check cases
         run: bash tests/harden-check/dockerfile-test.sh
