@@ -1,0 +1,90 @@
+name: build-harden check
+description: >-
+  Check that Dockerfiles run the build-harden kit last and that built images
+  hold its policy (no emSign or other listed CA is trusted).
+
+# Why this is an action: every repo that adopts the build-harden kit
+# (luthersystems/buildenv, images/harden) must prove the result in CI, on the
+# image it ships. Before this action each repo carried its own copy of the
+# glue (copy the kit out of its image, run both checks per platform, install
+# keytool or certutil). Now there is one copy, released with this repo's tags,
+# so a fix reaches every repo when v1 moves.
+#
+# Why the kit's harden step is not here: it runs inside `docker build`, in
+# each Dockerfile, which an action cannot reach. The kit image stays the one
+# source of the policy; this action reads the policy from the kit the caller
+# pins, so the list that harden.sh applied and the list checked are the same.
+#
+# Needs: a Linux runner with docker, bash, openssl and tar. python3 makes the
+# check search binaries for built-in root lists. With install-tools (the
+# default), keytool and certutil are installed with apt only when an image
+# has a Java keystore or an NSS database.
+
+inputs:
+  kit:
+    description: >-
+      The kit image, luthersystems/build-harden:<tag>@sha256:<digest>. Empty:
+      read it from the build-harden stage of the Dockerfiles (they must all
+      pin the same kit). Set it for an image with no Dockerfile (ko) or one
+      built on a hardened base image.
+    required: false
+    default: ""
+  dockerfiles:
+    description: >-
+      Dockerfiles, or directories of Dockerfile*, to check (one per line or
+      space separated). Empty: no Dockerfile check.
+    required: false
+    default: ""
+  images:
+    description: >-
+      Images to check, one per line: REF, or REF PLATFORM for an image tag
+      that holds one platform. The image must be in the local docker daemon
+      or pullable.
+    required: false
+    default: ""
+  platforms:
+    description: >-
+      Platforms (such as linux/amd64 linux/arm64) to check for each image
+      line that names no platform. Empty: the image's default platform.
+    required: false
+    default: ""
+  min-roots:
+    description: >-
+      The fewest certificates the system CA bundle must hold. 0 allows an
+      image with no system bundle (no TLS client).
+    required: false
+    default: "100"
+  strict-binaries:
+    description: >-
+      true: fail when a binary or source file holds a listed certificate
+      (by default it is only a warning).
+    required: false
+    default: "false"
+  allow:
+    description: >-
+      Paths in the image to skip, one glob per line. Give the reason in a
+      comment beside the input, where a reviewer sees it.
+    required: false
+    default: ""
+  install-tools:
+    description: >-
+      true: install missing host tools (openssl, python3, certutil, keytool)
+      with apt when the check needs them.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Run the build-harden check
+      shell: bash
+      env:
+        HC_KIT: ${{ inputs.kit }}
+        HC_DOCKERFILES: ${{ inputs.dockerfiles }}
+        HC_IMAGES: ${{ inputs.images }}
+        HC_PLATFORMS: ${{ inputs.platforms }}
+        HC_MIN_ROOTS: ${{ inputs.min-roots }}
+        HC_STRICT_BINARIES: ${{ inputs.strict-binaries }}
+        HC_ALLOW: ${{ inputs.allow }}
+        HC_INSTALL_TOOLS: ${{ inputs.install-tools }}
+      run: bash "$GITHUB_ACTION_PATH/harden-check.sh"
