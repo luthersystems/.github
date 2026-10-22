@@ -102,9 +102,10 @@ for f in "${files[@]}"; do
 		continue
 	fi
 	after=$(tail -n +"$((run_line + 1))" <<<"$stage")
-	# Only a RUN runs a command: a CMD, ENTRYPOINT or HEALTHCHECK that names
-	# curl or npm runs in the container, not in the build.
-	if grep -E '^[[:space:]]*RUN[[:space:]]' <<<"$after" | grep -qE "$pkg_re"; then
+	# A CMD, ENTRYPOINT or HEALTHCHECK that names curl or npm runs in the
+	# container, not in the build, so it cannot undo the kit. Every other line
+	# counts, a RUN heredoc's body and a lowercase run included.
+	if grep -viE '^[[:space:]]*(CMD|ENTRYPOINT|HEALTHCHECK|LABEL|EXPOSE|USER|WORKDIR|STOPSIGNAL|VOLUME|ENV|ARG|MAINTAINER)([[:space:]]|$)' <<<"$after" | grep -cE "$pkg_re" | grep -qv '^0$'; then
 		echo "FAIL: $f: a package or install step follows harden.sh" >&2
 		fail=1
 		continue

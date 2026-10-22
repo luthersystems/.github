@@ -75,7 +75,8 @@ while [ $# -gt 0 ]; do
 	*) break ;;
 	esac
 done
-IMAGE=${1:?usage: image.sh --policy DIR [options] IMAGE}
+[ $# -eq 1 ] || { echo "usage: image.sh --policy DIR [options] IMAGE" >&2; exit 2; }
+IMAGE=$1
 [ -n "$policy" ] || { echo "image.sh: --policy DIR is required" >&2; exit 2; }
 LIST=$policy/ca-distrust.list
 CERTS=$policy/ca-distrust
@@ -92,6 +93,13 @@ work=$(mktemp -d)
 cid=
 cleanup() {
 	local rc=$?
+	# Exit 1 is kept for a policy failure, which only the end of the script
+	# returns. Anything else that stops the script early with 1 (an unbound
+	# variable, a failing command in a function) could not check the image.
+	if [ "$rc" -eq 1 ] && [ "${policy_failed:-0}" != 1 ]; then
+		echo "image.sh: stopped by an unexpected error" >&2
+		rc=2
+	fi
 	[ -z "$cid" ] || docker rm -f "$cid" >/dev/null 2>&1 || true
 	# An image can hold read-only directories; make them writable to remove
 	# them, and never let the cleanup change the result.
@@ -111,13 +119,17 @@ bad() {
 
 # The policy: fingerprints, and the PEM lines used to find a certificate in
 # a binary.
-declare -A listed=()
+declare -A listed=() listed_key=()
 : >"$work/probes"
 while read -r fp kind file _; do
 	case $fp in '' | '#'*) continue ;; esac
 	got=$(openssl x509 -in "$CERTS/$file" -outform der | sha256sum | cut -c1-64)
 	[ "$got" = "$fp" ] || { echo "image.sh: $file has sha256 $got, the list says $fp" >&2; exit 2; }
 	listed[$fp]="$kind $file"
+	# The key too: a cross-signed copy of a listed CA is another certificate
+	# with the same key, and must be distrusted the same way.
+	kfp=$(openssl x509 -in "$CERTS/$file" -noout -pubkey | openssl pkey -pubin -outform der | sha256sum | cut -c1-64)
+	listed_key[$kfp]=$file
 	n=$(sed '/^-----/d' "$CERTS/$file" | wc -l)
 	sed '/^-----/d' "$CERTS/$file" | sed -n "4p;$(((n + 1) / 2))p" >>"$work/probes"
 done <"$LIST"
@@ -141,7 +153,9 @@ chmod -R u+rwX "$root"
 
 
 # is_binary FILE: FILE holds a NUL byte.
-is_binary() { [ "$(tr -d '\000' <"$1" | wc -c)" -ne "$(wc -c <"$1")" ]; }
+# Only the first 64 KiB are read: a binary holds a NUL byte near its start,
+# and a file of several GB must not be read in full.
+is_binary() { [ "$(head -c 65536 "$1" | tr -d '\000' | wc -c)" -ne "$(head -c 65536 "$1" | wc -c)" ]; }
 
 # in_root PATH: the file PATH names in the image, with every link resolved
 # inside the image root. A plain test of "$root$PATH" would follow an absolute
@@ -298,7 +312,7 @@ while IFS= read -r f; do
 		inblk && /^-----END (TRUSTED )?CERTIFICATE-----$/ { inblk = 0; next }
 		inblk { buf = buf $0 "\n"; next }
 		{ print }
-		END { if (inblk) printf "%s", buf }' | grep -qF -f "$work/probes"; then
+		END { if (inblk) printf "%s", buf }' | grep -cF -f "$work/probes" | grep -qv '^0$'; then
 		bad "$path: holds a listed certificate's text in a layout openssl cannot read"
 	fi
 	# Does a listed certificate verify against this file as a trust store?
@@ -345,7 +359,15 @@ if [ -s "$work/keystores" ]; then
 		# Every JDK needs its own blocked.certs: one JDK's file does not
 		# protect another.
 		case $path in */lib/security/cacerts)
-			[ -f "${ks%/cacerts}/blocked.certs" ] || bad "$path: a JDK keystore with no blocked.certs beside it"
+			if bc=$(in_root "${path%/cacerts}/blocked.certs"); then
+				# Checked here too, as the image resolves it: a link to
+				# /etc/java-*/security is skipped by the find below.
+				for fp in "${!listed[@]}"; do
+					grep -qxi "$fp" "$bc" || bad "${path%/cacerts}/blocked.certs: does not block ${listed[$fp]#* }"
+				done
+			else
+				bad "$path: a JDK keystore with no blocked.certs beside it"
+			fi
 			;;
 		esac
 		if ! out=$(keytool -list -keystore "$ks" -storepass changeit 2>&1); then
@@ -394,6 +416,13 @@ if [ -s "$work/nss" ]; then
 				[ -e "$pem" ] || continue
 				fp=$(openssl x509 -in "$pem" -outform der 2>/dev/null | sha256sum | cut -c1-64)
 				[ -n "${listed[$fp]:-}" ] && nss_trust[$fp]=$trust
+				# Any other certificate with a listed key (a cross-signed
+				# copy) must be distrusted too: the DER search skips NSS
+				# databases, so this is where it is caught.
+				kfp=$(openssl x509 -in "$pem" -noout -pubkey 2>/dev/null | openssl pkey -pubin -outform der 2>/dev/null | sha256sum | cut -c1-64)
+				if [ -z "${listed[$fp]:-}" ] && [ -n "${listed_key[$kfp]:-}" ] && [ "$trust" != p,p,p ]; then
+					bad "$path: '$nick' has the key of ${listed_key[$kfp]} and trust $trust, not p,p,p"
+				fi
 			done
 			rm -rf "$ndir"
 		# A listing line is the nickname, spaces, then the trust (three
@@ -497,7 +526,7 @@ for path in open(sys.argv[2], "rb").read().split(b"\0"):
         print("ERROR", path.decode(errors="replace"), e)
         continue
     if hits:
-        print(path.decode(errors="replace"), " ".join(hits))
+        print(path.decode(errors="replace") + "\t" + " ".join(hits))
 PY
 	python3 -I "$work/der.py" "$work/spki" "$work/all-files" >"$work/der-hits"
 	if grep -q '^ERROR ' "$work/der-hits"; then
@@ -505,7 +534,7 @@ PY
 		echo "image.sh: could not read a file of $IMAGE" >&2
 		exit 2
 	fi
-	while read -r f hits; do
+	while IFS=$'\t' read -r f hits; do
 		path=${f#"$root"}
 		allowed "$path" && continue
 		# An NSS database holds each listed certificate on purpose, with
@@ -523,6 +552,7 @@ else
 fi
 
 if [ "$fail" -ne 0 ]; then
+	policy_failed=1
 	echo "FAIL: $IMAGE does not hold the build-harden policy" >&2
 	exit 1
 fi
