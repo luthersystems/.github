@@ -1,0 +1,268 @@
+name: Quality
+
+# The code quality checks every luthersystems repo runs, as one reusable
+# workflow.
+#
+# Why it exists: before it, each repo kept its own copy of each check. Eight
+# repos had a work marker gate, in three forks (five of them byte-for-byte
+# copies of elps's). Nineteen repos ran golangci-lint with fourteen different
+# configs and versions from v2.1 to v2.15. Two repos had an API break gate,
+# both built around elps's cmd/apibreak with their own wrapper scripts. A fix
+# to one copy reached no other. This workflow gives every repo the same
+# checks, the same tool versions and the same fail rule, and a fix reaches
+# every repo when v1 moves. It has the same shape as security.yml, for the
+# same reasons.
+#
+# Why a reusable workflow and not one composite action: each check is its
+# own job, so they run side by side and each shows as its own check on the
+# PR. The `result` job sums them up, so an org ruleset can require one name,
+# "quality / result", in every repo, whatever checks apply to it.
+#
+# What it runs (each check's action explains its choices):
+#   work-markers  Every TODO-style marker names an issue as MARKER(#N); on a
+#                 PR, every named issue must be open. A file lists only the
+#                 words that are not work (copied source, data).
+#   lint          golangci-lint, one pinned version for every repo, with the
+#                 repo's own .golangci.yml. It also reports, without
+#                 failing, how that config differs from the shared baseline
+#                 (quality/golangci-baseline.yml): golangci-lint v2 cannot
+#                 import a shared config.
+#   api-break     Opt in (a repo with a public Go API). Fails on a removed or
+#                 incompatibly changed exported Go symbol, unless a row in an
+#                 overrides file accepts it. PR runs only.
+# A check with nothing to check (no Go module) is skipped, which counts as
+# passed for a required check.
+#
+# Not here: the benchmark gate (benchmark.yml), because it is slow, needs
+# fixed runners and is worth running only in repos with benchmarks. The
+# security checks are in security.yml. See docs/quality-workflow.md for the
+# caller, the exceptions and the rollout.
+
+on:
+  workflow_call:
+    inputs:
+      go-directories:
+        description: Go module directories to check, space separated. Empty means every go.mod outside vendor/, testdata/ and node_modules/.
+        type: string
+        required: false
+        default: ""
+      work-markers:
+        description: Run the work marker gate.
+        type: boolean
+        required: false
+        default: true
+      work-markers-allowlist:
+        description: The work marker allowlist (words that are not work), relative to the repo root. A missing file means no entries.
+        type: string
+        required: false
+        default: .github/quality/work-markers.txt
+      lint:
+        description: Run golangci-lint on the Go modules.
+        type: boolean
+        required: false
+        default: true
+      golangci-lint-version:
+        description: >-
+          golangci-lint version. One pin for every repo; change it here, not
+          in a caller, unless a repo needs time to fix new findings.
+        type: string
+        required: false
+        default: v2.15.0
+      lint-baseline-report:
+        description: Report how the repo's .golangci.yml differs from the shared baseline (never fails).
+        type: boolean
+        required: false
+        default: true
+      api-break:
+        description: Run the API break gate (repos with a public Go API).
+        type: boolean
+        required: false
+        default: false
+      api-break-directories:
+        description: >-
+          Go module directories the API break gate compares, space separated.
+          Empty means the same modules as go-directories. Leave out a module
+          with no public package (only main or internal packages): the gate
+          refuses to compare nothing.
+        type: string
+        required: false
+        default: ""
+      api-break-overrides:
+        description: The file of accepted breaking changes, relative to the repo root. A missing file means no entries.
+        type: string
+        required: false
+        default: .github/quality/api-breaks.txt
+      api-break-exclude-deps:
+        description: Import paths, space separated. A package that depends on one is not compared (for example, a private module CI cannot always read).
+        type: string
+        required: false
+        default: ""
+      api-break-surface-script:
+        description: >-
+          A repo script that adds API surfaces beyond Go (elps and substrate:
+          the Lisp surface). Called as `script <base-tree> <head-tree>
+          <out-dir>`; see actions/api-break.
+        type: string
+        required: false
+        default: ""
+      apibreak-version:
+        description: Version of luthersystems/elps cmd/apibreak, the judge.
+        type: string
+        required: false
+        default: v1.85.0
+      goprivate:
+        description: GOPRIVATE for the Go jobs. The modules it names are fetched over SSH with the SSH_PRIVATE_KEY secret.
+        type: string
+        required: false
+        default: github.com/luthersystems/license
+      runs-on:
+        description: >-
+          Runner for every job: a label (ubuntu-latest) or a JSON array of
+          labels (["self-hosted","luther-ci"]).
+        type: string
+        required: false
+        default: ubuntu-latest
+    secrets:
+      SSH_PRIVATE_KEY:
+        description: >-
+          SSH key (or keys, one after another) that can read the private Go
+          modules in goprivate. Needed only by repos that import one.
+        required: false
+      ISSUES_TOKEN:
+        description: >-
+          A token that can read issues in other private luthersystems repos.
+          Needed only when a work marker names an issue in another private
+          repo: the default token reads only the caller repo's issues.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    # A plain label or a JSON array: the same input serves a hosted runner
+    # and a self-hosted runner group.
+    runs-on: ${{ fromJSON(startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    timeout-minutes: 5
+    outputs:
+      go-directories: ${{ steps.detect.outputs.go-directories }}
+      go-version-file: ${{ steps.detect.outputs.go-version-file }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: detect
+        uses: luthersystems/.github/actions/security-detect@v1
+        with:
+          go-directories: ${{ inputs.go-directories }}
+
+  work-markers:
+    if: inputs.work-markers
+    runs-on: ${{ fromJSON(startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read # read the state of each issue a marker names
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Issues are checked on PRs only. A push to main checks only that each
+      # marker names an issue: closing an issue must not turn main red and
+      # block a release (substrate's rule).
+      - uses: luthersystems/.github/actions/work-markers@v1
+        with:
+          allowlist: ${{ inputs.work-markers-allowlist }}
+          check-issues: ${{ github.event_name == 'pull_request' }}
+          token: ${{ secrets.ISSUES_TOKEN || github.token }}
+
+  lint:
+    needs: detect
+    if: needs.detect.outputs.go-directories != '' && inputs.lint
+    runs-on: ${{ fromJSON(startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Go of the repo's go.mod: golangci-lint type-checks the code.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ needs.detect.outputs.go-version-file }}
+          cache: false
+      - uses: luthersystems/.github/actions/go-private-modules@v1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          goprivate: ${{ inputs.goprivate }}
+      - uses: luthersystems/.github/actions/golangci-lint@v1
+        with:
+          directories: ${{ needs.detect.outputs.go-directories }}
+          version: ${{ inputs.golangci-lint-version }}
+          baseline-report: ${{ inputs.lint-baseline-report }}
+
+  api-break:
+    needs: detect
+    # A PR only: the gate compares the PR with its base. On a push the change
+    # was already judged on its PR.
+    if: needs.detect.outputs.go-directories != '' && inputs.api-break && github.event_name == 'pull_request'
+    runs-on: ${{ fromJSON(startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge commit and its two parents, so the base tree can be
+          # checked out from the clone.
+          fetch-depth: 2
+          persist-credentials: false
+      - id: base
+        uses: luthersystems/.github/actions/pr-base@v1
+      # Only when the checkout is not a merge (a PR with a conflict): then
+      # the base is pull_request.base.sha, which the depth-2 clone may not
+      # hold. The token goes in this one step, before any repo code runs.
+      - name: Fetch the base commit
+        if: steps.base.outputs.source == 'fallback'
+        env:
+          SHA: ${{ steps.base.outputs.sha }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git cat-file -e "$SHA^{commit}" 2>/dev/null && exit 0
+          auth="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch --no-tags --depth=1 origin "$SHA"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ needs.detect.outputs.go-version-file }}
+          cache: false
+      - uses: luthersystems/.github/actions/go-private-modules@v1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          goprivate: ${{ inputs.goprivate }}
+      - uses: luthersystems/.github/actions/api-break@v1
+        with:
+          directories: ${{ inputs.api-break-directories || needs.detect.outputs.go-directories }}
+          base-sha: ${{ steps.base.outputs.sha }}
+          overrides: ${{ inputs.api-break-overrides }}
+          exclude-deps: ${{ inputs.api-break-exclude-deps }}
+          surface-script: ${{ inputs.api-break-surface-script }}
+          apibreak-version: ${{ inputs.apibreak-version }}
+
+  # The one check a ruleset requires. It runs even when a check failed or was
+  # skipped, and passes only when every check passed or had nothing to check.
+  result:
+    needs: [detect, work-markers, lint, api-break]
+    if: always()
+    runs-on: ${{ fromJSON(startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    timeout-minutes: 5
+    steps:
+      - name: Sum up the checks
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          results="$(jq -c 'with_entries(.value = .value.result)' <<<"$NEEDS")"
+          echo "$results" | jq -r 'to_entries[] | "\(.key): \(.value)"'
+          bad="$(jq -r '[to_entries[] | select(.value != "success" and .value != "skipped") | .key] | join(" ")' <<<"$results")"
+          if [ -n "$bad" ]; then
+            echo "::error title=Quality checks failed::$bad. Open each job's log for what it found."
+            exit 1
+          fi
