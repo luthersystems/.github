@@ -163,6 +163,10 @@ jobs:
         run: bash tests/security/security-test.sh
       - name: Drift issue cases
         run: node tests/security/drift-test.cjs
+      - name: Auto-fix prompt and permissions cases
+        run: bash tests/security/autofix-test.sh
+      - name: Auto-fix failure report cases
+        run: node tests/security/autofix-report-test.cjs
       - name: osv gate version and fix cases
         run: python3 tests/security/osv_gate_test.py
 

@@ -1,0 +1,161 @@
+name: security auto-fix
+description: >-
+  After a scheduled security scan fails, let Claude triage the govulncheck and
+  osv-scanner findings and propose a fix in a pull request.
+
+# Why: the shared security workflow detects, and its security-drift issue
+# tells people, but nobody fixes a weekly cron failure until they look. Most
+# findings are a patch or minor bump of one dependency, which an agent can
+# prepare and verify; a person then reviews and merges it. reliable ran this
+# as its own govulncheck-autofix.yml first; this is that workflow, shared,
+# and widened to lockfile findings (Sam's choice, 2026-10-22).
+#
+# It PROPOSES, never lands: branch protection and the prompt both keep it to
+# a pull request or an issue comment. govulncheck reports reachability, and
+# the fix is often not a bump (ui-core's argo-workflows CVEs needed a v3 to v4
+# migration across 23 files), so the prompt tells the agent to stop and
+# explain instead of attempting a migration.
+#
+# Only govulncheck and osv-scanner findings: a gosec finding or a leaked
+# secret needs a person (and a leaked secret needs rotation, not a commit).
+#
+# Needs, from the job: the repo checked out with persist-credentials: false,
+# Go on PATH, permissions id-token: write (Bedrock and the Claude App token)
+# and issues: write, the Claude GitHub App installed on the repo, and the repo
+# in the trust list of the Bedrock role (common-infrastructure,
+# storage/github_actions_claude_bedrock.tf), which admits only runs on main.
+
+inputs:
+  failed:
+    description: Space separated checks that failed and that this action can fix (govulncheck, dependencies).
+    required: true
+  govulncheck-exemptions:
+    description: govulncheck exemptions file, relative to the repo root.
+    required: false
+    default: .github/security/govulncheck-exemptions.txt
+  model:
+    description: Bedrock model ID for the agent.
+    required: false
+    default: us.anthropic.claude-opus-5-5
+  fallback-model:
+    description: Bedrock model ID to use when the model is overloaded.
+    required: false
+    default: us.anthropic.claude-sonnet-5-5
+  bedrock-role:
+    description: AWS role that may call Claude on Bedrock.
+    required: false
+    default: arn:aws:iam::637423319757:role/github-actions-claude-bedrock
+  aws-region:
+    description: AWS region of the Bedrock role.
+    required: false
+    default: us-west-2
+  max-turns:
+    description: Most agent turns. A run that needs more stops, and the dead-layer step reports it.
+    required: false
+    default: "60"
+  govulncheck-version:
+    description: govulncheck version, the one the govulncheck action pins, so the agent sees what the gate saw.
+    required: false
+    default: v1.8.0
+  osv-scanner-version:
+    description: osv-scanner version, the one the osv-scan action pins.
+    required: false
+    default: v2.6.0
+
+runs:
+  using: composite
+  steps:
+    # The same tools and versions as the gate, installed before the agent
+    # starts so it does not spend turns (and minutes) building them. The
+    # caches are the ones the gate's actions fill.
+    - if: contains(inputs.failed, 'govulncheck')
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/govulncheck-${{ inputs.govulncheck-version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-govulncheck-${{ inputs.govulncheck-version }}
+    - if: contains(inputs.failed, 'govulncheck')
+      name: Install govulncheck
+      shell: bash
+      env:
+        VERSION: ${{ inputs.govulncheck-version }}
+        DIR: ${{ runner.temp }}/luther-tools/govulncheck-${{ inputs.govulncheck-version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "golang.org/x/vuln/cmd/govulncheck@${VERSION}" govulncheck
+    - if: contains(inputs.failed, 'dependencies')
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/osv-scanner-${{ inputs.osv-scanner-version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-osv-scanner-${{ inputs.osv-scanner-version }}
+    - if: contains(inputs.failed, 'dependencies')
+      name: Install osv-scanner
+      shell: bash
+      env:
+        VERSION: ${{ inputs.osv-scanner-version }}
+        DIR: ${{ runner.temp }}/luther-tools/osv-scanner-${{ inputs.osv-scanner-version }}
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/google/osv-scanner/v2/cmd/osv-scanner@${VERSION}" osv-scanner
+
+    # go-private-modules rewrites every https://github.com/ URL to SSH, so go
+    # can fetch private modules with the deploy key. That key is read-only,
+    # so the agent's push of its fix branch must stay on HTTPS with the
+    # Claude App token. Git uses the longest matching insteadOf, so mapping
+    # this repo's URL to itself wins over the org-wide rewrite.
+    - name: Keep this repo's remote on HTTPS
+      shell: bash
+      env:
+        URL: ${{ github.server_url }}/${{ github.repository }}
+      run: git config --global "url.${URL}.insteadOf" "$URL"
+
+    - name: Write the prompt
+      id: prompt
+      shell: bash
+      env:
+        FAILED: ${{ inputs.failed }}
+        EXEMPTIONS: ${{ inputs.govulncheck-exemptions }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: bash "$GITHUB_ACTION_PATH/prompt.sh" "$GITHUB_ACTION_PATH/prompt.md" >>"$GITHUB_OUTPUT"
+
+    - name: Configure AWS credentials for Bedrock (OIDC)
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: ${{ inputs.bedrock-role }}
+        aws-region: ${{ inputs.aws-region }}
+        # Claude Code cannot refresh credentials in a job; the job's
+        # timeout is 60 minutes, so ask for that.
+        role-duration-seconds: 3600
+
+    - name: Triage and propose a fix
+      uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
+      with:
+        # No github_token: the action then mints the Claude App token over
+        # OIDC, and a pull request the App opens runs the repo's required
+        # checks. One opened with the default GITHUB_TOKEN would not.
+        use_bedrock: "true"
+        prompt: ${{ steps.prompt.outputs.prompt }}
+        claude_args: |
+          --allowedTools Bash,Edit,Write,Read,Grep,Glob,MultiEdit
+          --max-turns ${{ inputs.max-turns }}
+          --model ${{ inputs.model }}
+          --fallback-model ${{ inputs.fallback-model }}
+
+    # claude-code-action hides the transcript from the job log and writes it
+    # to RUNNER_TEMP, which is wiped when the runner goes. Keep it for
+    # troubleshooting, also when the agent failed or timed out.
+    - name: Keep the agent's transcript
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: security-autofix-transcript-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/claude-execution-output.json
+        retention-days: 14
+        if-no-files-found: warn
+
+    # A dead fixer must not look like a quiet one. buildenv's scout-autofix
+    # died on a rate limit three days running and nothing said so.
+    - name: Report a failed auto-fix run
+      if: failure()
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        REPORT_SCRIPT: ${{ github.action_path }}/report-failure.cjs
+      with:
+        script: |
+          const run = require(process.env.REPORT_SCRIPT);
+          await run({ github, context, core });
