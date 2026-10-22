@@ -6,15 +6,15 @@
 # values are put in with a plain text replace, not a shell or envsubst
 # expansion, so nothing in them is evaluated.
 #
-# Usage: FAILED=... EXEMPTIONS=... RUN_URL=... prompt.sh TEMPLATE
+# Usage: FAILED=... RUN_URL=... RUN_ID=... prompt.sh TEMPLATE
 set -euo pipefail
 
 template="$1"
-: "${FAILED:?}" "${EXEMPTIONS:?}" "${RUN_URL:?}"
+: "${FAILED:?}" "${RUN_URL:?}" "${RUN_ID:?}"
 
 prompt="$(<"$template")"
 prompt="${prompt//@FAILED@/"$FAILED"}"
-prompt="${prompt//@EXEMPTIONS@/"$EXEMPTIONS"}"
+prompt="${prompt//@RUN_ID@/"$RUN_ID"}"
 prompt="${prompt//@RUN_URL@/"$RUN_URL"}"
 
 # A random delimiter, so no line of the prompt can end the output early.

@@ -1,4 +1,5 @@
-The scheduled run of the shared Security workflow failed on `main`: @RUN_URL@
+A scheduled or manual run of the shared Security workflow failed on the
+default branch. You are running as a job of that run: @RUN_URL@
 
 The checks you are asked to fix failed: @FAILED@
 (`govulncheck` is the Go vulnerability scan; `dependencies` is the
@@ -6,15 +7,16 @@ osv-scanner scan of lockfiles that are not Go's.)
 
 Read the open issue labelled `security-drift` and the log of each failed
 job of that run (`security / govulncheck`, `security / dependencies`) for
-the report. Then reproduce it here:
+the report. Then reproduce it here, from the repo root, with the gate itself:
 
-- govulncheck: `govulncheck ./...` in each Go module (every `go.mod` outside
-  `vendor/`, `testdata/` and `node_modules/`). Exempted advisories are in
-  `@EXEMPTIONS@` when that file exists.
-- dependencies: `osv-scanner scan source -r .` from the repo root. Exempted
-  advisories are the `[[IgnoredVulns]]` rows of `osv-scanner.toml`. The gate
-  fails only on a High or Critical advisory with a fixed version; Go modules
-  are left to govulncheck.
+- `security-gate-govulncheck` runs the govulncheck gate exactly as the scan
+  did: the same modules, the same exemptions file, binary mode included.
+- `security-gate-dependencies` runs the osv-scanner gate exactly as the scan
+  did: the same excludes, `osv-scanner.toml` exemptions, and fail rule (a
+  High or Critical advisory with a fixed version; Go left to govulncheck).
+
+Use these, not a plain `govulncheck ./...` or `osv-scanner`: those report
+findings the gate exempts or leaves out, and you must not fix those.
 
 FIRST, decide whether there is a real finding at all. The scheduled scan also
 fails on infrastructure errors (a stalled module download, a runner that
@@ -37,12 +39,15 @@ For each finding, classify it:
      when its parent has no release with the fix. yarn and pnpm: the same
      with their own lockfile-only commands. pip/uv: `uv lock
      --upgrade-package <pkg>`.
-   - Change nothing else. Verify: build and test the affected module (for
-     Go: `go build ./...`, `go vet ./...`, `go test ./...`; for npm: `npm ci
-     --ignore-scripts` then the repo's build and test scripts if it has
-     them), then run the scanner again and show the finding gone.
+   - Change nothing else. Verify: build and test the affected module, and
+     run EVERY build and test command through `run-untrusted`, which drops
+     this job's credentials from the environment (for Go: `run-untrusted go
+     build ./...`, `run-untrusted go vet ./...`, `run-untrusted go test
+     ./...`; for npm: `run-untrusted npm ci --ignore-scripts`, then the
+     repo's build and test scripts the same way). Then run the gate command
+     again and show the finding gone.
    - Open ONE pull request for all the bumps, on a branch named
-     `security-autofix/<yyyy-mm-dd>`. Its description names each advisory,
+     `security-autofix/@RUN_ID@`. Its description names each advisory,
      the fixed version, the trace or path the scanner reported, and the
      verification output. Link the `security-drift` issue (do not close it;
      the next clean scan does).
@@ -70,7 +75,7 @@ HARD RULES:
 - Keep the diff minimal: bump only what carries an advisory, plus what the
   package manager needs for it. Do not upgrade unrelated dependencies.
 - A bump that crosses a major version is case 2, not case 1.
-- Do not run install scripts (`--ignore-scripts`) and do not run code you
-  downloaded other than the repo's own build and tests.
+- Do not run install scripts (`--ignore-scripts`). Run the repo's builds
+  and tests only through `run-untrusted`, and run no other downloaded code.
 - Report honestly. If a verification step failed or you skipped it, say so
   in the PR or the comment.

@@ -29,14 +29,21 @@ inputs:
   failed:
     description: Space separated checks that failed and that this action can fix (govulncheck, dependencies).
     required: true
+  go-directories:
+    description: Go module directories the scan read (the workflow's go-directories output of detect).
+    required: false
+    default: ""
   govulncheck-exemptions:
     description: govulncheck exemptions file, relative to the repo root.
     required: false
     default: .github/security/govulncheck-exemptions.txt
-  model:
-    description: Bedrock model ID for the agent.
+  osv-exclude:
+    description: Directories osv-scanner left out, one per line, as the workflow passed them.
     required: false
-    default: us.anthropic.claude-opus-5-5
+    default: ""
+  model:
+    description: Bedrock model ID for the agent. The workflow's autofix-model input sets it, so its default lives in one place.
+    required: true
   fallback-model:
     description: Bedrock model ID to use when the model is overloaded.
     required: false
@@ -53,6 +60,8 @@ inputs:
     description: Most agent turns. A run that needs more stops, and the dead-layer step reports it.
     required: false
     default: "60"
+  # The gate actions' pins. tests/security/autofix-test.sh fails when they
+  # differ, so a scanner bump cannot leave the agent unable to reproduce.
   govulncheck-version:
     description: govulncheck version, the one the govulncheck action pins, so the agent sees what the gate saw.
     required: false
@@ -93,24 +102,27 @@ runs:
         DIR: ${{ runner.temp }}/luther-tools/osv-scanner-${{ inputs.osv-scanner-version }}
       run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/google/osv-scanner/v2/cmd/osv-scanner@${VERSION}" osv-scanner
 
-    # go-private-modules rewrites every https://github.com/ URL to SSH, so go
-    # can fetch private modules with the deploy key. That key is read-only,
-    # so the agent's push of its fix branch must stay on HTTPS with the
-    # Claude App token. Git uses the longest matching insteadOf, so mapping
-    # this repo's URL to itself wins over the org-wide rewrite.
-    - name: Keep this repo's remote on HTTPS
+    # Note on push: go-private-modules rewrites https://github.com/ to SSH
+    # for private modules. It does not touch the agent's push, because
+    # claude-code-action sets the remote to a URL with the App token in it,
+    # which that prefix does not match.
+    - name: Write the gate and sandbox commands
       shell: bash
       env:
-        URL: ${{ github.server_url }}/${{ github.repository }}
-      run: git config --global "url.${URL}.insteadOf" "$URL"
+        BIN: ${{ runner.temp }}/security-autofix-bin
+        ACTIONS_DIR: ${{ github.action_path }}/..
+        DIRS: ${{ inputs.go-directories }}
+        EXEMPTIONS: ${{ inputs.govulncheck-exemptions }}
+        EXCLUDE: ${{ inputs.osv-exclude }}
+      run: bash "$GITHUB_ACTION_PATH/setup.sh"
 
     - name: Write the prompt
       id: prompt
       shell: bash
       env:
         FAILED: ${{ inputs.failed }}
-        EXEMPTIONS: ${{ inputs.govulncheck-exemptions }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: bash "$GITHUB_ACTION_PATH/prompt.sh" "$GITHUB_ACTION_PATH/prompt.md" >>"$GITHUB_OUTPUT"
 
     - name: Configure AWS credentials for Bedrock (OIDC)
@@ -150,11 +162,14 @@ runs:
 
     # A dead fixer must not look like a quiet one. buildenv's scout-autofix
     # died on a rate limit three days running and nothing said so.
-    - name: Report a failed auto-fix run
-      if: failure()
+    # cancelled(): a job that hits its timeout is cancelled, not failed.
+    # A finished run closes the report, so it does not go stale.
+    - name: Report the auto-fix run
+      if: always()
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
       env:
-        REPORT_SCRIPT: ${{ github.action_path }}/report-failure.cjs
+        REPORT_SCRIPT: ${{ github.action_path }}/report.cjs
+        OUTCOME: ${{ (failure() || cancelled()) && 'failed' || 'finished' }}
       with:
         script: |
           const run = require(process.env.REPORT_SCRIPT);
