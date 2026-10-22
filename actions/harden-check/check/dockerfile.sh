@@ -70,9 +70,17 @@ for f in "${files[@]}"; do
 		continue
 	fi
 	# Instructions are not case-sensitive: "from" starts a stage too.
-	# The check does not parse heredocs (RUN <<EOF): each line of a body is
-	# read as if it were an instruction. So it can fail a safe Dockerfile
-	# (a COPY heredoc whose text names npm), but never pass an unsafe one.
+	# A heredoc (RUN <<EOF, COPY <<EOF) is refused. Its body lines are not
+	# instructions, but a line check cannot tell them apart without parsing
+	# BuildKit's heredoc rules, and every simple reading lets a body line
+	# fake one (a "FROM scratch" ends the check, a copy of the kit RUN hides
+	# the steps before it). Write the step as a script file, or as a RUN
+	# with && and backslashes.
+	if grep -E '(^|[^<])<<-?[[:space:]]*["'"'"']?[A-Za-z_]' <<<"$text" >/dev/null; then
+		echo "FAIL: $f: a heredoc (<<WORD): the check cannot read it safely; use a script file or a plain RUN" >&2
+		fail=1
+		continue
+	fi
 	last_from=$(grep -niE '^[[:space:]]*FROM[[:space:]]' <<<"$text" | tail -1 | cut -d: -f1)
 	stage=$(tail -n +"${last_from:-1}" <<<"$text")
 	base=$(head -1 <<<"$stage" | awk '{ for (i = 2; i <= NF; i++) if ($i !~ /^--/) { print $i; exit } }')
@@ -106,9 +114,9 @@ for f in "${files[@]}"; do
 		continue
 	fi
 	after=$(tail -n +"$((run_line + 1))" <<<"$stage")
-	# Every line counts but the instructions that run nothing in the build:
-	# a CMD or HEALTHCHECK that names curl or npm runs in the container, and
-	# a COPY is checked below. A RUN heredoc's body lines count.
+	# Every instruction counts but those that run nothing in the build: a CMD
+	# or HEALTHCHECK that names curl or npm runs in the container, and a COPY
+	# is checked below.
 	if grep -viE '^[[:space:]]*(CMD|ENTRYPOINT|HEALTHCHECK|LABEL|EXPOSE|USER|WORKDIR|STOPSIGNAL|VOLUME|MAINTAINER|COPY)([[:space:]]|$)' <<<"$after" | grep -E "$pkg_re" >/dev/null; then
 		echo "FAIL: $f: a package or install step follows harden.sh" >&2
 		fail=1

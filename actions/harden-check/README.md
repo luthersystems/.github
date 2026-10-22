@@ -46,6 +46,11 @@ kit release and no PR per repo.
 | `allow` | none | Image paths to skip, one glob per line. Say why beside the input. |
 | `install-tools` | `true` | Install missing host tools with apt: keytool and certutil only when an image has a Java keystore or an NSS database. |
 
+The Dockerfile check refuses a heredoc (`RUN <<EOF`, `COPY <<EOF`): a line
+check cannot tell a heredoc's body from instructions, and a body line could
+fake one. Use a script file or a plain `RUN` instead. It may fail a safe
+Dockerfile; it must never pass an unsafe one.
+
 Give `dockerfiles`, `images` or both. The image must be in the runner's docker
 daemon (for example `docker buildx build --load`) or pullable. The check
 exports the image's file system and runs every check on the host, so an image

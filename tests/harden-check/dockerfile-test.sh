@@ -37,6 +37,7 @@ expect "a local COPY after the kit" 0 "$d/pass-copy-after.Dockerfile"
 expect "an indented RUN after the kit" 1 "$d/fail-indented-run-after.Dockerfile"
 expect "a << in a CMD, then COPY --from" 1 "$d/fail-cmd-heredoc-after.Dockerfile"
 expect "CRLF line endings" 0 "$d/pass-crlf.Dockerfile"
+expect "a heredoc that fakes the kit RUN" 1 "$d/fail-fake-kit-in-heredoc.Dockerfile"
 expect "the fixture Dockerfiles" 0 "$here/nss-other-nickname" "$here/chrome-no-nssdb"
 
 got=$(bash "$check" --list-kits "$d/pass-cmd-after.Dockerfile")

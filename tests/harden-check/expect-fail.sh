@@ -13,13 +13,18 @@ kit=${KIT:?}
 rc_all=0
 
 # expect NAME CODE PATTERN VAR=VALUE...: run the script with the inputs, and
-# want exit CODE and a line that matches PATTERN (grep -E).
+# want exit CODE and a line that matches PATTERN (grep -E). With ONLY set (a
+# regex), every FAIL line but the last summary must match it too, so a case
+# fails if anything else goes wrong in the same image.
 expect() {
-	local name=$1 want=$2 pattern=$3 log rc=0
+	local name=$1 want=$2 pattern=$3 log rc=0 other=
 	shift 3
 	log=$(mktemp)
 	env HC_KIT= HC_DOCKERFILES= HC_IMAGES= HC_PLATFORMS= HC_ALLOW= "$@" bash "$script" >"$log" 2>&1 || rc=$?
-	if [ "$rc" -eq "$want" ] && grep -qE -- "$pattern" "$log"; then
+	if [ -n "${ONLY:-}" ]; then
+		other=$(grep '^FAIL: ' "$log" | grep -v ' does not hold the build-harden policy$' | grep -vE -- "$ONLY" || true)
+	fi
+	if [ "$rc" -eq "$want" ] && grep -qE -- "$pattern" "$log" && [ -z "$other" ]; then
 		echo "ok: $name (exit $rc)"
 	else
 		echo "::error::$name: want exit $want and /$pattern/, got exit $rc"
@@ -39,7 +44,10 @@ expect "headless-shell with no NSS database (buildenv#165)" 1 'headless-shell: C
 # (luthersystems/buildenv#166), and the check resolves it inside the image.
 # Move this case to the passing ones in ci.yml once a kit with the fix is
 # released and the fixture pins it.
-expect "a Debian JDK whose blocked.certs is a link (buildenv#166)" 1 '^FAIL: /etc/java-17-openjdk/security/blocked.certs: does not block ' \
+# The keystore is a link too: it must be found and read (the "checked"
+# line), and the blocked.certs lines must be the only failures.
+ONLY='^FAIL: /etc/java-17-openjdk/security/blocked.certs: does not block ' \
+	expect "a Debian JDK whose blocked.certs is a link (buildenv#166)" 1 '^/etc/ssl/certs/java/cacerts: checked$' \
 	HC_DOCKERFILES="$here/debian-jdk" HC_IMAGES="harden-check-test/debian-jdk"
 
 expect "a Dockerfile that pins another kit" 2 'a Dockerfile pins luthersystems/build-harden:v0.1.45@' \

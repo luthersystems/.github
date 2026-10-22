@@ -379,11 +379,16 @@ while IFS= read -r -d '' ks; do
 	done < <(sed -n 's/.*fingerprint (SHA-256): //p' <<<"$out")
 	echo "$path: checked"
 done <"$work/keystores"
+# Each JDK security directory, found by its cacerts or its blocked.certs
+# (a file or a link). The allow list applies to the directory: allowing
+# either file skips the JDK. Each blocked.certs is checked once, as the image
+# resolves it.
 declare -A seen_blocked=()
-while IFS= read -r -d '' jks; do
-	sec=${jks%/cacerts}
-	sec=${sec#"$root"}
+find "$root" \( -path '*/lib/security/cacerts' -o -path '*/lib/security/blocked.certs' \) \( -type f -o -type l \) -print 2>/dev/null |
+	sed -e "s#^$root##" -e 's#/[^/]*$##' | sort -u >"$work/jdks"
+while IFS= read -r sec; do
 	allowed "$sec/cacerts" && continue
+	allowed "$sec/blocked.certs" && continue
 	if ! bc=$(in_root "$sec/blocked.certs"); then
 		bad "$sec: a JDK with no blocked.certs"
 		continue
@@ -391,17 +396,7 @@ while IFS= read -r -d '' jks; do
 	[ -z "${seen_blocked[$bc]:-}" ] || continue
 	seen_blocked[$bc]=1
 	check_blocked "$bc" "${bc#"$root"}"
-done < <(find "$root" -path '*/lib/security/cacerts' \( -type f -o -type l \) -print0 2>/dev/null)
-# Every other JDK blocked.certs too (a JDK with no cacerts of its own reads a
-# trust store given at run time).
-while IFS= read -r -d '' b; do
-	p=${b#"$root"}
-	allowed "$p" && continue
-	bc=$(in_root "$p") || { bad "$p: a link to no file"; continue; }
-	[ -z "${seen_blocked[$bc]:-}" ] || continue
-	seen_blocked[$bc]=1
-	check_blocked "$bc" "${bc#"$root"}"
-done < <(find "$root" -path '*/lib/security/blocked.certs' \( -type f -o -type l \) -print0 2>/dev/null)
+done <"$work/jdks"
 
 # NSS.
 find "$root" -type f \( -name cert9.db -o -name cert8.db \) -print0 2>/dev/null >"$work/nss" || true
