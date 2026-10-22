@@ -1,0 +1,74 @@
+name: Release
+
+# Releases this repo's own shared workflows.
+#
+# Why it exists: callers pin the shared workflows by tag (release-tag.yml@v1),
+# so a change here reaches them only when someone tags it. Agent sandboxes
+# cannot push tags, so tagging by hand left callers pinned to a v1 that did
+# not exist yet. This workflow cuts the release from a dispatch instead.
+#
+# Why it calls release-tag.yml: it is the same release cut every other repo
+# uses, so this repo gets the same checks (live main, CI green, strict
+# semver, never a second release of one commit) and dogfoods the workflow it
+# ships. `./` means the copy at the dispatched commit, so a release is cut by
+# the code it releases.
+#
+# Why it moves the major tag: callers pin vMAJOR (v1), not vMAJOR.MINOR.PATCH,
+# so they get compatible fixes without a PR in every repo. After each
+# release, vMAJOR is moved to the new commit. A breaking change needs the
+# next major (v2.0.0), which leaves v1 callers where they are.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (vMAJOR.MINOR.PATCH). Empty = next patch."
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: "Print what would be released; create and move nothing"
+        type: boolean
+        required: false
+        default: true
+
+permissions: {}
+
+jobs:
+  release:
+    permissions:
+      actions: read # read actionlint's push run
+      contents: write # create the release
+    uses: ./.github/workflows/release-tag.yml
+    with:
+      version: ${{ inputs.version }}
+      dry_run: ${{ inputs.dry_run }}
+      ci_workflow: actionlint.yml
+
+  move-major:
+    name: Move the major tag
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # move vMAJOR
+    steps:
+      - name: Point vMAJOR at the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          # release-tag.yml validated VERSION and checked that its tag points
+          # at GITHUB_SHA, so the major tag follows the same commit.
+          [[ "$VERSION" =~ ^(v[0-9]+)\.[0-9]+\.[0-9]+$ ]] || { echo "error: bad version '$VERSION'" >&2; exit 1; }
+          major="${BASH_REMATCH[1]}"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$major" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$major" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$major" -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          echo "$major now points at $GITHUB_SHA ($VERSION)"
