@@ -1,0 +1,51 @@
+name: work-markers
+description: >-
+  Fail when a work marker in the tracked tree names no issue, and (on pull
+  requests) when a referenced issue is not open.
+
+# Why: a marker for deferred work that names no issue is never picked up, and
+# one that names a closed issue points at work that is "done" but is not. So
+# every marker must be written MARKER(#N) or MARKER(owner/repo#N), and on a
+# pull request each issue it names must be open. This is luthersystems/
+# substrate's rule; the owner chose it for every repo. The script explains
+# the matching rules and the exit codes.
+#
+# The allowlist is only for words that are not work: copied third-party
+# source, data, a quoted message. Deferred work goes on the marker itself.
+#
+# Needs: git, and for the issue check curl and python3 (all on GitHub's
+# runners). The checkout must be the caller repo, at its root.
+
+inputs:
+  allowlist:
+    description: >-
+      Allowlist file, relative to the repo root. A missing file means no
+      entries, so every marker must name an issue.
+    required: false
+    default: .github/quality/work-markers.txt
+  check-issues:
+    description: >-
+      "true" reads each referenced issue and fails unless it is open. The
+      quality workflow sets it on pull requests only, so closing an issue
+      does not turn main red; the next pull request shows the marker.
+    required: false
+    default: "false"
+  token:
+    description: >-
+      Token that reads the referenced issues. The default GITHUB_TOKEN reads
+      only the caller repo's issues. A marker that names an issue in another
+      private repo needs a token that can read that repo; the caller passes
+      it as a secret.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check work markers
+      shell: bash
+      env:
+        ALLOWLIST: ${{ inputs.allowlist }}
+        CHECK_ISSUES: ${{ inputs.check-issues }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: bash "$GITHUB_ACTION_PATH/work-markers.sh"
