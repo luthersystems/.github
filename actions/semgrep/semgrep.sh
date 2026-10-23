@@ -17,7 +17,9 @@ rules="$(cd "${RULES:?}" && pwd)"
 # would catch a real bug there is hidden too. Name the rule. Semgrep also
 # reads the short `nosem`, and `nosem:` or `nosemgrep:` with no id, so those
 # count as bare too.
-bare="$(git grep -nE '(^|[^[:alnum:]_])nosem(grep)?([^[:alnum:]_-]|$)' -- '*.py' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.ts' '*.tsx' 2>/dev/null |
+# Only a comment counts (`#`, `//` or `/*` before it, as Semgrep needs), so
+# prose that names the syntax, such as a docstring, does not fail the gate.
+bare="$(git grep -nE '(#|//|/\*).*(^|[^[:alnum:]_])nosem(grep)?([^[:alnum:]_-]|$)' -- '*.py' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.ts' '*.tsx' 2>/dev/null |
   grep -vE 'nosem(grep)?[[:space:]]*:[[:space:]]*[[:alnum:]_]' || true)"
 if [ -n "$bare" ]; then
   while IFS= read -r hit; do
