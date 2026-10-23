@@ -49,6 +49,7 @@ runs:
       shell: bash
       env:
         VENV: ${{ runner.temp }}/luther-tools/semgrep-venv
+        BIN: ${{ runner.temp }}/luther-tools/semgrep-bin
       run: |
         set -euo pipefail
         python3 -m venv "$VENV"
@@ -57,7 +58,12 @@ runs:
         # resolver would refuse.
         "$VENV/bin/pip" install --quiet --disable-pip-version-check --require-hashes --only-binary=:all: \
           --no-deps -r "$GITHUB_ACTION_PATH/requirements.txt"
-        echo "$VENV/bin" >>"$GITHUB_PATH"
+        # Put only semgrep on PATH: the venv's bin also holds python3 and
+        # pip, which would shadow the runner's for the caller's later steps
+        # (a python3 without the runner's packages, such as PyYAML).
+        mkdir -p "$BIN"
+        ln -sf "$VENV/bin/semgrep" "$BIN/semgrep"
+        echo "$BIN" >>"$GITHUB_PATH"
     - name: Check out the pinned rules
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
