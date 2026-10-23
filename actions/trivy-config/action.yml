@@ -50,11 +50,11 @@ runs:
         # Trivy's releases are built with this experiment; without it the
         # build fails on encoding/json/v2.
         GOEXPERIMENT: jsonv2
-        # The Go that Trivy's go.mod names. A newer Go fails the build:
+        # The Go that Trivy's go.mod names. A newer Go can fail the build:
         # encoding/json/v2 is an experiment and changes between releases
-        # (Go 1.26 dropped the json.SkipFunc v0.69.3 uses). Bump with the
-        # version input.
-        GOTOOLCHAIN: go1.25.6
+        # (Go 1.27 dropped the json.SkipFunc that v0.69.3 uses). Bump with
+        # the version input.
+        TOOL_GOTOOLCHAIN: go1.25.6
       run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/aquasecurity/trivy/cmd/trivy@${VERSION}" trivy
     - name: Run trivy config
       shell: bash
