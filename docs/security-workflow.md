@@ -181,11 +181,11 @@ one:
 
 ### Turning it on
 
-1. Install the Claude GitHub App on the repo.
-2. Add the repo to `github_actions_claude_bedrock_repos` in
-   luthersystems/common-infrastructure, `storage/github_actions_claude_bedrock.tf`
-   (merging applies it).
-3. In the repo's caller, add `id-token: write` to the `security` job and
+1. Install the Claude GitHub App on the repo. The Bedrock role
+   (luthersystems/common-infrastructure,
+   `storage/github_actions_claude_bedrock.tf`) admits a run on `main` of any
+   luthersystems repo, so the repo needs no entry there.
+2. In the repo's caller, add `id-token: write` to the `security` job and
    set the input:
 
 ```yaml

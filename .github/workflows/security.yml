@@ -81,8 +81,8 @@ on:
           After a scheduled or manual run of the default branch fails
           govulncheck or dependencies, let Claude propose a fix in a pull
           request. Needs drift-issue. The caller's security job must grant
-          id-token: write and issues: write, the Claude GitHub App must be installed, and the repo
-          must be in the Bedrock role's trust list. See docs/security-workflow.md.
+          id-token: write and issues: write, and the Claude GitHub App must
+          be installed. See docs/security-workflow.md.
         type: boolean
         required: false
         default: false
