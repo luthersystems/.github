@@ -64,8 +64,10 @@ def unpinned(path):
             # carry no package==version to check.
             if not line or line.startswith(("-", "\\", ".", "/")) or "://" in line:
                 continue
-            line = line.rstrip("\\").strip()
-            if "==" not in line and "===" not in line:
+            # Cut the environment marker first: `x>=2; python_version == "3.10"`
+            # is unpinned, and the marker's `==` must not hide that.
+            line = line.rstrip("\\").split(";", 1)[0].strip()
+            if "==" not in line:
                 bad.append((n, line))
     return bad
 

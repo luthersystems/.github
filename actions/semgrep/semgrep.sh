@@ -14,8 +14,11 @@ out="$tmp/semgrep.json"
 rules="$(cd "${RULES:?}" && pwd)"
 
 # A bare `nosemgrep` hides every rule on its line, so a later rule that
-# would catch a real bug there is hidden too. Name the rule.
-bare="$(git grep -nE 'nosemgrep([^:]|$)' -- '*.py' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.ts' '*.tsx' 2>/dev/null || true)"
+# would catch a real bug there is hidden too. Name the rule. Semgrep also
+# reads the short `nosem`, and `nosem:` or `nosemgrep:` with no id, so those
+# count as bare too.
+bare="$(git grep -nE '(^|[^[:alnum:]_])nosem(grep)?([^[:alnum:]_-]|$)' -- '*.py' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.ts' '*.tsx' 2>/dev/null |
+  grep -vE 'nosem(grep)?[[:space:]]*:[[:space:]]*[[:alnum:]_]' || true)"
 if [ -n "$bare" ]; then
   while IFS= read -r hit; do
     f="${hit%%:*}" rest="${hit#*:}" n="${rest%%:*}"
@@ -23,9 +26,9 @@ if [ -n "$bare" ]; then
   done <<<"$bare"
 fi
 
-# --metrics=off: send nothing to semgrep.dev. Only files git tracks are
-# scanned (Semgrep's default in a git repo), so the rules checkout, which
-# sits untracked in the workspace, is not scanned.
+# --metrics=off: send nothing to semgrep.dev. The rules checkout must sit
+# outside the repo (action.yml moves it to RUNNER_TEMP): Semgrep scans
+# untracked files too, and the rules' own test files are full of findings.
 args=(scan --metrics=off --disable-version-check --quiet --severity ERROR --json --output "$out")
 for l in ${LANGS:-python javascript typescript}; do
   args+=(--config "$rules/$l")
@@ -48,8 +51,14 @@ if [ "$status" -gt 1 ] || [ ! -s "$out" ]; then
   exit 1
 fi
 # Semgrep names a rule loaded from a directory by its path, dots for
-# slashes; strip the checkout's part so ids read as in the registry.
-prefix="$(echo "${rules#/}" | tr '/' '.')."
+# slashes: relative to the working directory when the rules are under it,
+# else absolute, with leading dots dropped. Strip the checkout's part so ids
+# read as in the registry and match an exemption row.
+case "$rules" in
+  "$PWD"/*) p="${rules#"$PWD"/}" ;;
+  *) p="${rules#/}" ;;
+esac
+prefix="$(printf '%s' "$p" | tr '/' '.' | sed 's/^\.*//')."
 status=0
 python3 "$here/semgrep-gate.py" --exemptions "${EXEMPTIONS:-}" --rule-prefix "$prefix" "$out" || status=$?
 [ -z "$bare" ] || status=1

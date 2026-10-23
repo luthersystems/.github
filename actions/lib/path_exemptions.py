@@ -14,12 +14,18 @@ the expiry optional and needs a YAML parser, and Semgrep's ignore file has no
 expiry at all.  The govulncheck exemptions already use this pipe format, so
 one shape covers every check, and the gate, not the tool, applies it.
 
-`path` is a glob matched against the file the finding is in, relative to the
-repo root (`*` matches every file, `**` crosses directories).  An expired row
-exempts nothing, so an exemption cannot outlive its reason by accident.
+`path` is the file the finding is in, relative to the repo root, or a glob:
+`*` and `?` stay inside one directory and `**` crosses directories, so
+`modules/*.tf` does not reach `modules/a/b.tf` and `**` covers the whole
+repo.  Nothing else is special: `[` and `]` are literal, because a path the
+gate prints (a Next.js `app/[route]/page.ts`, say) must match itself when
+pasted into a row.  fnmatch is not used for that reason, and because its `*`
+crosses `/`, which would let a reviewed row exempt more than it says.
+
+An expired row exempts nothing, so an exemption cannot outlive its reason by
+accident.
 """
 import datetime
-import fnmatch
 import os
 import re
 
@@ -30,10 +36,32 @@ class Row:
     def __init__(self, rule, path, expires, issue, line):
         self.rule, self.path, self.expires, self.issue, self.line = rule, path, expires, issue, line
         self.used = False
+        self._re = glob_re(path)
 
     def matches(self, rule_ids, path):
-        # fnmatch's `*` already crosses `/`, so `**` needs no special case.
-        return self.rule in rule_ids and fnmatch.fnmatchcase(path, self.path)
+        return self.rule in rule_ids and self._re.fullmatch(path) is not None
+
+
+def glob_re(glob):
+    """Compile a row's path glob (rules in the module docstring)."""
+    out, i = [], 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append("(?:.*/)?")  # zero or more directories
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif glob[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif glob[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(glob[i]))
+            i += 1
+    return re.compile("".join(out))
 
 
 def load(path, today=None):

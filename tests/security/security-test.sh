@@ -116,6 +116,8 @@ printf 'tomli>=2\n' >requirements.txt
 git add . && git -c user.email=t@e -c user.name=t commit -qm x
 expect pass "osv: a manifest with no lockfile warns" "package.json has dependencies but no lockfile" -- bash "$osv"
 expect pass "osv: an unpinned requirements file warns" "Unpinned requirements" -- bash "$osv"
+printf 'tomli>=2; python_version == "3.10"\n' >requirements.txt
+expect pass "osv: a marker's == does not hide an unpinned range" "Unpinned requirements" -- bash "$osv"
 
 # --- trivy config ----------------------------------------------------------
 tv="$root/actions/trivy-config/trivy-config.sh"
@@ -130,9 +132,16 @@ expect fail "trivy: a High misconfiguration fails" "Trivy HIGH misconfiguration 
 echo "DS-0002 | Dockerfile | $future | luthersystems/.github#1 | test row" >.github/security/trivy-exemptions.txt
 expect pass "trivy: a live exemption passes" "Trivy finding exempted::DS-0002" -- \
   env EXEMPTIONS=.github/security/trivy-exemptions.txt bash "$tv"
-echo "AVD-DS-0002 | * | $future | luthersystems/.github#1 | test row" >.github/security/trivy-exemptions.txt
-expect pass "trivy: the AVD id and a * path match too" "Trivy finding exempted::DS-0002" -- \
+echo "AVD-DS-0002 | ** | $future | luthersystems/.github#1 | test row" >.github/security/trivy-exemptions.txt
+expect pass "trivy: the AVD id and a ** path match too" "Trivy finding exempted::DS-0002" -- \
   env EXEMPTIONS=.github/security/trivy-exemptions.txt bash "$tv"
+echo "DS-0002 | */* | $future | luthersystems/.github#1 | test row" >.github/security/trivy-exemptions.txt
+expect fail "trivy: a * path stays in one directory" "DS-0002::not exempted" -- \
+  env EXEMPTIONS=.github/security/trivy-exemptions.txt bash "$tv"
+printf 'DS-0002\n' >.trivyignore
+expect fail "trivy: a .trivyignore cannot hide a finding" "DS-0002::not exempted" -- \
+  env EXEMPTIONS=.github/security/trivy-exemptions.txt bash "$tv"
+rm .trivyignore
 echo "DS-0002 | Dockerfile | $past | luthersystems/.github#1 | test row" >.github/security/trivy-exemptions.txt
 expect fail "trivy: an expired exemption fails" "exemption expired $past" -- \
   env EXEMPTIONS=.github/security/trivy-exemptions.txt bash "$tv"
@@ -145,6 +154,16 @@ expect pass "trivy: a skipped directory is not scanned" "no High or Critical mis
 printf 'FROM alpine:3.20\nUSER 65534\n# trivy:ignore:DS-0026\nRUN true\n' >Dockerfile
 git add . && git -c user.email=t@e -c user.name=t commit -qm y
 expect fail "trivy: an inline ignore with no expiry fails" "Inline Trivy ignore without an expiry" -- \
+  env EXEMPTIONS= bash "$tv"
+sed -i 's/trivy:ignore/tfsec:ignore/' Dockerfile
+git add . && git -c user.email=t@e -c user.name=t commit -qm z
+expect fail "trivy: a tfsec ignore with no expiry fails" "Inline Trivy ignore without an expiry" -- \
+  env EXEMPTIONS= bash "$tv"
+printf 'FROM alpine:3.20\nUSER 65534\nRUN true\n' >Dockerfile
+# shellcheck disable=SC2016 # the backticks are the README's own text
+printf 'Write `# trivy:ignore:<id>:exp:YYYY-MM-DD`, or # trivy:ignore:X in prose.\n' >README.md
+git add . && git -c user.email=t@e -c user.name=t commit -qm w
+expect pass "trivy: prose that names the syntax passes" "no High or Critical misconfiguration blocks" -- \
   env EXEMPTIONS= bash "$tv"
 cd "$work/empty" || exit 1
 expect pass "trivy: nothing to scan passes" "no High or Critical misconfiguration blocks" -- env EXEMPTIONS= bash "$tv"
@@ -176,6 +195,23 @@ sed -i 's/# nosemgrep$/# nosemgrep: python.lang.security.audit.subprocess-shell-
 git add . && git -c user.email=t@e -c user.name=t commit -qm z
 expect pass "semgrep: a nosemgrep naming the rule passes" "no security finding blocks" -- \
   env RULES="$RULES" LANGS=python bash "$sg"
+sed -i 's/# nosemgrep: .*$/# nosem/' app.py
+git add . && git -c user.email=t@e -c user.name=t commit -qm v
+expect fail "semgrep: a bare nosem fails too" "nosemgrep without a rule id" -- \
+  env RULES="$RULES" LANGS=python bash "$sg"
+# A path the gate prints with [ ] in it must match itself as a row, and the
+# rule id must read as in the registry when the rules sit under the repo.
+mkdir -p 'app/[route]'
+git mv app.py 'app/[route]/route.py'
+sed -i 's/  # nosem$//' 'app/[route]/route.py'
+git -c user.email=t@e -c user.name=t commit -qm u
+echo "python.lang.security.audit.subprocess-shell-true | app/[route]/route.py | $future | luthersystems/.github#1 | test row" >.github/security/semgrep-exemptions.txt
+expect pass "semgrep: a literal path with [ ] matches itself" "Semgrep finding exempted" -- \
+  env RULES="$RULES" LANGS=python EXEMPTIONS=.github/security/semgrep-exemptions.txt bash "$sg"
+mkdir -p rules && cp -r "$RULES/python" rules/
+expect pass "semgrep: ids are the registry's with the rules under the repo" "Semgrep finding exempted" -- \
+  env RULES=rules LANGS=python EXEMPTIONS=.github/security/semgrep-exemptions.txt EXCLUDE=rules bash "$sg"
+rm -rf rules .github/security/semgrep-exemptions.txt
 
 # --- gitleaks --------------------------------------------------------------
 gl="$root/actions/gitleaks/gitleaks.sh"

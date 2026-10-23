@@ -170,7 +170,7 @@ jobs:
         # The semgrep step above left semgrep on PATH and the pinned rules
         # in the workspace; the test script runs its cases against them.
         env:
-          RULES: ${{ github.workspace }}/.luther-semgrep-rules
+          RULES: ${{ runner.temp }}/luther-semgrep-rules
         run: bash tests/security/security-test.sh
       - name: Drift issue cases
         run: node tests/security/drift-test.cjs

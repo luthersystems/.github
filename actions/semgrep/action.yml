@@ -17,7 +17,8 @@ description: >-
 # Why pip with --require-hashes: Semgrep is a Python package, and
 # requirements.txt pins it and every dependency to the hash of the file
 # that was reviewed (regenerate with: uv pip compile --universal
-# --generate-hashes --python-version 3.10 requirements.in -o requirements.txt).
+# --generate-hashes --python-version 3.10 --override overrides.txt
+# requirements.in -o requirements.txt).
 #
 # Needs: python3 >= 3.10 (the runner's).
 
@@ -51,8 +52,11 @@ runs:
       run: |
         set -euo pipefail
         python3 -m venv "$VENV"
+        # --no-deps: requirements.txt already lists every dependency, hashed,
+        # and overrides semgrep's mcp pin (see overrides.txt), which pip's
+        # resolver would refuse.
         "$VENV/bin/pip" install --quiet --disable-pip-version-check --require-hashes --only-binary=:all: \
-          -r "$GITHUB_ACTION_PATH/requirements.txt"
+          --no-deps -r "$GITHUB_ACTION_PATH/requirements.txt"
         echo "$VENV/bin" >>"$GITHUB_PATH"
     - name: Check out the pinned rules
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,10 +65,23 @@ runs:
         ref: ${{ inputs.rules-ref }}
         path: .luther-semgrep-rules
         persist-credentials: false
+    # actions/checkout can only write inside the workspace, so the rules are
+    # moved out at once: left there, Semgrep (which scans untracked files)
+    # and any later scan in the caller's job would read the rules' own
+    # deliberately vulnerable test files, and the caller's tree would show
+    # an untracked directory.
+    - name: Move the rules out of the workspace
+      shell: bash
+      env:
+        DEST: ${{ runner.temp }}/luther-semgrep-rules
+      run: |
+        set -euo pipefail
+        rm -rf "$DEST"
+        mv .luther-semgrep-rules "$DEST"
     - name: Run semgrep
       shell: bash
       env:
-        RULES: .luther-semgrep-rules
+        RULES: ${{ runner.temp }}/luther-semgrep-rules
         LANGS: ${{ inputs.languages }}
         EXEMPTIONS: ${{ inputs.exemptions }}
         EXCLUDE: ${{ inputs.exclude }}
