@@ -109,6 +109,8 @@ The caller's job id must be `security`, so the check is named
 | `goprivate` | `github.com/luthersystems/license` | the repo imports another private module |
 | `drift-issue` | `true` | the repo tracks scheduled failures another way |
 | `runs-on` | `ubuntu-latest` | the repo needs a self-hosted runner |
+| `autofix` | `false` | the repo wants Claude to propose fixes for scheduled scan failures (see [Auto-fix](#auto-fix)) |
+| `autofix-model` | `us.anthropic.claude-opus-5-5` | a cheaper or newer Bedrock model is wanted |
 
 ### The drift issue
 
@@ -117,6 +119,92 @@ A scheduled or manual run that fails opens one issue labelled
 first clean run. A cancelled run counts as failed, so it never closes the
 issue. This replaces the `govulncheck-drift` issues of the old per-repo
 scheduled workflows.
+
+## Auto-fix
+
+With `autofix: true`, a scheduled or manual run of the default branch that
+fails `govulncheck` or `dependencies` starts one more job, `autofix`. Claude
+reads the drift issue and the failed jobs' logs, reproduces each finding by
+running the gate's own scripts with the scan's inputs, and then, for each
+one:
+
+| Finding | What it does |
+|---|---|
+| Fixed by a patch or minor bump (Go module, Go toolchain patch, npm, yarn, pnpm, uv) | Bumps it, builds, tests, scans again, and opens one pull request for all such bumps |
+| Needs a major version or a code change | Comments on the drift issue with the advisory, the call sites and a size of the work |
+| No upstream fix | Comments on the drift issue |
+| Not reproducible (an infrastructure failure) | Comments on the drift issue and stops |
+
+### Why it works this way
+
+- **It proposes, it never lands.** It opens a pull request; a person reviews
+  and merges it. govulncheck reports reachable code, and the fix is often not
+  a bump: ui-core's argo-workflows findings needed a v3 to v4 migration across
+  23 files. The prompt stops the agent at a major version.
+- **Go and lockfiles only.** A gosec finding or a leaked secret needs a
+  person; a leaked secret needs rotation, not a commit.
+- **Only on the default branch.** The Bedrock role admits only runs on
+  `main`, and a PR's own failures belong to that PR.
+- **It reproduces with the gate, not a plain scan.** A plain
+  `osv-scanner` or `govulncheck ./...` reports what the gate exempts or
+  leaves out, and the agent would fix those. A test fails when the agent's
+  scanner pins differ from the gate's.
+- **Builds and tests run without credentials in their environment.** A
+  bump downloads code, and the job holds the OIDC request token, AWS
+  credentials and the deploy key's ssh-agent. The agent runs builds, tests
+  and package managers (but `go get` and `go mod tidy`) through
+  `run-untrusted`, which keeps only an allowlist of variables. It is not a
+  sandbox: code running as the same user could still read them from
+  `/proc`, the ssh-agent socket or the git remote. What such code could do:
+  spend on Bedrock, push a branch with the Claude App (it cannot merge past
+  branch protection), and read the repos the deploy key reads. A real
+  boundary (another user, or a verify job with no credentials) is a later
+  step.
+- **It does not repeat itself.** It reads the drift issue's comments and the
+  open `security-autofix/` pull requests first, and stops without a comment
+  when nothing changed.
+- **It never changes `security / result`.** The job runs after `result` and
+  is not in its needs. If the agent fails (turn limit, rate limit,
+  timeout, or a failure before the agent starts), the job's last step
+  (`actions/security-autofix-report`) comments on the drift issue, or on one
+  issue labelled `security-autofix-failing` that the next finished run
+  closes, so a dead fixer does not look like a quiet one. It needs `drift-issue: true`, since
+  it reports there.
+- **It inherits its permissions.** A job of a reusable workflow that asks
+  for a permission its caller did not grant stops the whole workflow at
+  startup, even when the job is skipped (probed on luthersystems/.github#13).
+  So the `autofix` job asks for none: it inherits the caller's grant, and
+  every scan job narrows that to `contents: read`.
+  `tests/security/autofix-test.sh` fails if a job asks for more.
+- **The Claude App opens the pull request**, not the job's `GITHUB_TOKEN`,
+  so the pull request runs the repo's required checks.
+
+### Turning it on
+
+1. Install the Claude GitHub App on the repo.
+2. Add the repo to `github_actions_claude_bedrock_repos` in
+   luthersystems/common-infrastructure, `storage/github_actions_claude_bedrock.tf`
+   (merging applies it).
+3. In the repo's caller, add `id-token: write` to the `security` job and
+   set the input:
+
+```yaml
+jobs:
+  security:
+    permissions:
+      contents: read
+      issues: write # the security-drift issue on scheduled runs
+      id-token: write # auto-fix: Bedrock and the Claude App token
+    uses: luthersystems/.github/.github/workflows/security.yml@v1
+    with:
+      autofix: true
+```
+
+`id-token: write` also applies to the caller's pull request runs, but only
+the `autofix` job can use it, and that job runs only on the default branch.
+
+To test it, run the Security workflow by hand from `main`
+(`workflow_dispatch`). The `autofix` job runs only when a scan fails.
 
 ## How to exempt a finding
 
@@ -189,6 +277,9 @@ list in the same step.
 and on fixtures that must pass, and asserts the reason in the log.
 `tests/security/drift-test.cjs` tests the drift issue logic, and
 `tests/security/osv_gate_test.py` tests how the osv gate orders versions and
-finds the fix for the installed release line. The `CI`
+finds the fix for the installed release line.
+`tests/security/autofix-test.sh` tests the auto-fix prompt builder and the
+permissions rule above, and `tests/security/autofix-report-test.cjs` tests
+the failed-run report. The `CI`
 workflow runs both, and runs each action as a caller does. The fixtures are
 described in `tests/security/testdata/README.md`.

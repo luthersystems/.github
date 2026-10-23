@@ -1,0 +1,25 @@
+name: security auto-fix report
+description: Report a failed security auto-fix run on an issue, and close that report when a run finishes.
+
+# Why a separate action: the autofix job runs it as its last step with
+# if: always(), so a job that fails before the agent starts (checkout,
+# setup-go, a rotated SSH key) is reported too. A step inside
+# security-autofix would not run then. Why report at all: see report.cjs.
+# Needs issues: write.
+
+inputs:
+  status:
+    description: The job status (job.status).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        STATUS: ${{ inputs.status }}
+        REPORT_SCRIPT: ${{ github.action_path }}/report.cjs
+      with:
+        script: |
+          const run = require(process.env.REPORT_SCRIPT);
+          await run({ github, context, core });

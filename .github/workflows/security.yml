@@ -28,6 +28,11 @@ name: Security
 # A check with nothing to scan (no Go module) is skipped, which counts as
 # passed for a required check.
 #
+# Auto-fix (opt-in, input `autofix`): after a scheduled or manual run of
+# main fails govulncheck or dependencies, Claude triages the findings and
+# opens a pull request with the fix, or explains on the drift issue why a
+# bump cannot fix it. See actions/security-autofix for why and how.
+#
 # Not here: harden-check, because it needs the image the repo's build job
 # just built; repos that ship images keep calling actions/harden-check in that
 # job. Image CVE scans are a later step.
@@ -71,6 +76,21 @@ on:
         type: boolean
         required: false
         default: true
+      autofix:
+        description: >-
+          After a scheduled or manual run of the default branch fails
+          govulncheck or dependencies, let Claude propose a fix in a pull
+          request. Needs drift-issue. The caller's security job must grant
+          id-token: write and issues: write, the Claude GitHub App must be installed, and the repo
+          must be in the Bedrock role's trust list. See docs/security-workflow.md.
+        type: boolean
+        required: false
+        default: false
+      autofix-model:
+        description: Bedrock model ID for the auto-fix agent.
+        type: string
+        required: false
+        default: us.anthropic.claude-opus-5-5
       runs-on:
         description: Runner label for every job.
         type: string
@@ -83,13 +103,19 @@ on:
           modules in goprivate. Needed only by repos that import one.
         required: false
 
-permissions:
-  contents: read
+# No workflow-level permissions, and each scan job sets its own. Why: a job
+# of a reusable workflow that asks for a permission its caller did not grant
+# stops the whole workflow at startup, even when the job would be skipped
+# (tested on luthersystems/.github#13: startup_failure). So the autofix job
+# cannot ask for id-token: write; it inherits whatever the caller's security
+# job grants, and every other job narrows that to read.
 
 jobs:
   detect:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       go-directories: ${{ steps.detect.outputs.go-directories }}
       go-version-file: ${{ steps.detect.outputs.go-version-file }}
@@ -107,6 +133,8 @@ jobs:
     if: needs.detect.outputs.go-directories != ''
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,6 +159,8 @@ jobs:
     if: needs.detect.outputs.go-directories != '' && inputs.gosec
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -150,6 +180,8 @@ jobs:
   secrets:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -168,6 +200,8 @@ jobs:
   dependencies:
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -190,7 +224,23 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write # the security-drift issue on scheduled runs
+    outputs:
+      tracks-default: ${{ steps.branch.outputs.tracks-default }}
     steps:
+      # Whether this run tracks the default branch, decided once for the
+      # drift issue and the autofix job: a manual run on a feature branch
+      # must not open or close the issue that tracks main, or propose fixes.
+      # A scheduled run always runs on the default branch, and its event
+      # payload holds only the cron line (no repository), so only a manual
+      # run is checked against the branch.
+      - name: Does this run track the default branch?
+        id: branch
+        env:
+          TRACKS: >-
+            ${{ github.event_name == 'schedule' ||
+            (github.event_name == 'workflow_dispatch' &&
+            github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+        run: echo "tracks-default=$TRACKS" >>"$GITHUB_OUTPUT"
       - name: Sum up the checks
         id: sum
         env:
@@ -203,12 +253,7 @@ jobs:
           bad="$(jq -r '[to_entries[] | select(.value != "success" and .value != "skipped") | .key] | join(" ")' <<<"$results")"
           echo "bad=$bad" >>"$GITHUB_OUTPUT"
       - name: Open, refresh or close the security-drift issue
-        # Only runs of the default branch: a manual run on a feature branch
-        # must not open or close the issue that tracks main.
-        if: >-
-          inputs.drift-issue &&
-          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
-          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: inputs.drift-issue && steps.branch.outputs.tracks-default == 'true'
         uses: luthersystems/.github/actions/security-drift@v1
         with:
           results: ${{ steps.sum.outputs.results }}
@@ -219,3 +264,57 @@ jobs:
         run: |
           echo "::error title=Security checks failed::$BAD. Open each job's log for what it found."
           exit 1
+
+  # Opt-in. Not in `result`'s needs, so it never changes the required check:
+  # the run is already red when it starts, and its own failure is reported on
+  # the drift issue instead. Runs after `result` so the drift issue it reads
+  # and comments on exists. Only on main, because the Bedrock role admits
+  # only runs on main, and a fix belongs to main's findings.
+  autofix:
+    needs: [detect, govulncheck, dependencies, result]
+    # drift-issue: the agent reports on that issue, so it must exist.
+    if: >-
+      always() && inputs.autofix && inputs.drift-issue &&
+      needs.result.outputs.tracks-default == 'true' &&
+      (needs.govulncheck.result == 'failure' || needs.dependencies.result == 'failure')
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 60
+    # No permissions key: see the note above `jobs:`. The caller grants
+    # id-token: write (Bedrock and the Claude App token) and issues: write
+    # (comments on the drift issue). The fix branch and pull request use the
+    # Claude App token, not this job's token.
+    concurrency:
+      group: security-autofix-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Must stay false. A persisted GITHUB_TOKEN header wins over the
+          # App token claude-code-action puts in the remote URL, so the fix
+          # PR's pushes would come from github-actions[bot], whose runs wait
+          # for approval (buildenv's fix PR #127 waited 14 days that way).
+          persist-credentials: false
+      # The Go of go.mod, as the scan used, so a stdlib finding reproduces.
+      # A repo with no Go module still needs Go to build osv-scanner.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ needs.detect.outputs.go-version-file }}
+          go-version: ${{ needs.detect.outputs.go-version-file == '' && 'stable' || '' }}
+          cache: false
+      - uses: luthersystems/.github/actions/go-private-modules@v1
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          goprivate: ${{ inputs.goprivate }}
+      - uses: luthersystems/.github/actions/security-autofix@v1
+        with:
+          failed: ${{ needs.govulncheck.result == 'failure' && 'govulncheck' || '' }} ${{ needs.dependencies.result == 'failure' && 'dependencies' || '' }}
+          go-directories: ${{ needs.detect.outputs.go-directories }}
+          govulncheck-exemptions: ${{ inputs.govulncheck-exemptions }}
+          osv-exclude: ${{ inputs.osv-exclude }}
+          model: ${{ inputs.autofix-model }}
+      # A job step, not part of the action above, so a failure before the
+      # agent starts (checkout, setup-go, a rotated SSH key) is reported too.
+      - if: always()
+        uses: luthersystems/.github/actions/security-autofix-report@v1
+        with:
+          status: ${{ job.status }}
