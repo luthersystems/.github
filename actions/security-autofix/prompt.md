@@ -5,9 +5,10 @@ The checks you are asked to fix failed: @FAILED@
 (`govulncheck` is the Go vulnerability scan; `dependencies` is the
 osv-scanner scan of lockfiles that are not Go's.)
 
-Read the open issue labelled `security-drift` and the log of each failed
-job of that run (`security / govulncheck`, `security / dependencies`) for
-the report. Then reproduce it here, from the repo root, with the gate itself:
+The open issue labelled `security-drift` lists which checks failed. This
+run is still in progress (you are one of its jobs), so its full log is not
+available; reproduce the report here instead, from the repo root, with the
+gate itself:
 
 - `security-gate-govulncheck` runs the govulncheck gate exactly as the scan
   did: the same modules, the same exemptions file, binary mode included.
@@ -23,8 +24,12 @@ fails on infrastructure errors (a stalled module download, a runner that
 died). If you cannot reproduce a finding, comment that on the issue and STOP.
 Do not open a PR.
 
-Before you open a PR, list the open PRs (`gh pr list --state open`). If one
-already fixes the same advisory, comment on the issue with its link and STOP.
+Do not repeat yourself. Read the drift issue's comments and the open pull
+requests on `security-autofix/` branches first. If an open PR already fixes
+an advisory, leave that advisory alone. If an earlier comment already
+explains an advisory (major version, no upstream fix) and nothing about it
+has changed, do not comment about it again. If that leaves nothing new to
+do, STOP without a comment.
 
 For each finding, classify it:
 
@@ -33,12 +38,18 @@ For each finding, classify it:
      the Go standard library is fixed by the `toolchain` line of `go.mod`
      (and the Go of any CI image that builds the module); move it to the
      fixed patch release of the same minor version only.
-   - npm: change the version in the lockfile only, with
-     `npm install <pkg>@<fixed-version> --package-lock-only --ignore-scripts`
-     for a direct dependency, or an `overrides` entry for a transitive one
-     when its parent has no release with the fix. yarn and pnpm: the same
-     with their own lockfile-only commands. pip/uv: `uv lock
-     --upgrade-package <pkg>`.
+   - npm: for a transitive package whose parent's range already allows the
+     fixed version, `npm update <pkg> --package-lock-only --ignore-scripts`
+     (the lockfile only). For a direct dependency, `npm install
+     <pkg>@<fixed-version> --package-lock-only --ignore-scripts` (it also
+     moves the range in package.json). Only when no parent release allows
+     the fix, an `overrides` entry. yarn and pnpm: their own lockfile-only
+     equivalents. uv: `uv lock --upgrade-package <pkg>`.
+   - Run every package manager command except `go get` and `go mod tidy`
+     through `run-untrusted` (for example `run-untrusted uv lock
+     --upgrade-package <pkg>`): uv and some npm packages run downloaded
+     build code to read metadata. `go get` and `go mod tidy` run no
+     downloaded code and need the ssh-agent for private modules.
    - Change nothing else. Verify: build and test the affected module, and
      run EVERY build and test command through `run-untrusted`, which drops
      this job's credentials from the environment (for Go: `run-untrusted go

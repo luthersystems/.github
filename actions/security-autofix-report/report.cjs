@@ -13,7 +13,8 @@
 // drift issue, which says nothing about whether the fixer works. The
 // failing issue closes only when a fixer run finishes.
 //
-// Env: OUTCOME (failed or finished).
+// Env: STATUS, the job status (success, failure or cancelled). Anything but
+// success counts as failed: a job that hits its timeout is cancelled.
 
 const DRIFT = 'security-drift';
 const FAILING = 'security-autofix-failing';
@@ -29,7 +30,7 @@ module.exports = async ({ github, context, core }) => {
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
   const failing = await openIssue(github, owner, repo, FAILING);
 
-  if (process.env.OUTCOME !== 'failed') {
+  if (process.env.STATUS === 'success') {
     if (failing) {
       await github.rest.issues.createComment({
         owner, repo, issue_number: failing.number,

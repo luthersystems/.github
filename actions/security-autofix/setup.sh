@@ -12,10 +12,13 @@
 #
 # Why run-untrusted: a bump downloads code, and building and testing it runs
 # that code in this job, which holds the OIDC request token (Bedrock, Claude
-# App), the AWS credentials and the deploy key's ssh-agent. Running builds
-# and tests with only an allowlist of variables keeps those out of reach.
-# It does not hide the Claude App token claude-code-action puts in the git
-# remote, which can push a branch but cannot merge past branch protection.
+# App), the AWS credentials and the deploy key's ssh-agent. run-untrusted
+# runs a command with only an allowlist of variables, so that code does not
+# find them in its environment. It is not a sandbox: the code runs as the
+# same user, so it could still read the agent's /proc/<pid>/environ, find
+# the ssh-agent socket, or read the App token in the git remote. A real
+# boundary (another user, or a job with no credentials) is a later step;
+# this removes the easy path, the one a careless package would take.
 #
 # Env: BIN, ACTIONS_DIR (this repo's actions/), DIRS, EXEMPTIONS, EXCLUDE.
 set -euo pipefail

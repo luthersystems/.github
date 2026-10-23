@@ -224,7 +224,23 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write # the security-drift issue on scheduled runs
+    outputs:
+      tracks-default: ${{ steps.branch.outputs.tracks-default }}
     steps:
+      # Whether this run tracks the default branch, decided once for the
+      # drift issue and the autofix job: a manual run on a feature branch
+      # must not open or close the issue that tracks main, or propose fixes.
+      # A scheduled run always runs on the default branch, and its event
+      # payload holds only the cron line (no repository), so only a manual
+      # run is checked against the branch.
+      - name: Does this run track the default branch?
+        id: branch
+        env:
+          TRACKS: >-
+            ${{ github.event_name == 'schedule' ||
+            (github.event_name == 'workflow_dispatch' &&
+            github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+        run: echo "tracks-default=$TRACKS" >>"$GITHUB_OUTPUT"
       - name: Sum up the checks
         id: sum
         env:
@@ -237,15 +253,7 @@ jobs:
           bad="$(jq -r '[to_entries[] | select(.value != "success" and .value != "skipped") | .key] | join(" ")' <<<"$results")"
           echo "bad=$bad" >>"$GITHUB_OUTPUT"
       - name: Open, refresh or close the security-drift issue
-        # Only runs of the default branch: a manual run on a feature branch
-        # must not open or close the issue that tracks main. A scheduled run
-        # always runs on the default branch, and its event payload holds only
-        # the cron line (no repository), so only a manual run is checked.
-        if: >-
-          inputs.drift-issue &&
-          (github.event_name == 'schedule' ||
-           (github.event_name == 'workflow_dispatch' &&
-            github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
+        if: inputs.drift-issue && steps.branch.outputs.tracks-default == 'true'
         uses: luthersystems/.github/actions/security-drift@v1
         with:
           results: ${{ steps.sum.outputs.results }}
@@ -264,13 +272,10 @@ jobs:
   # only runs on main, and a fix belongs to main's findings.
   autofix:
     needs: [detect, govulncheck, dependencies, result]
-    # The same default-branch rule as the drift step (see there).
     # drift-issue: the agent reports on that issue, so it must exist.
     if: >-
       always() && inputs.autofix && inputs.drift-issue &&
-      (github.event_name == 'schedule' ||
-       (github.event_name == 'workflow_dispatch' &&
-        github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) &&
+      needs.result.outputs.tracks-default == 'true' &&
       (needs.govulncheck.result == 'failure' || needs.dependencies.result == 'failure')
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 60
@@ -307,3 +312,9 @@ jobs:
           govulncheck-exemptions: ${{ inputs.govulncheck-exemptions }}
           osv-exclude: ${{ inputs.osv-exclude }}
           model: ${{ inputs.autofix-model }}
+      # A job step, not part of the action above, so a failure before the
+      # agent starts (checkout, setup-go, a rotated SSH key) is reported too.
+      - if: always()
+        uses: luthersystems/.github/actions/security-autofix-report@v1
+        with:
+          status: ${{ job.status }}

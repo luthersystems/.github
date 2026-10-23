@@ -51,7 +51,12 @@ echo "ok   autofix: gate commands and run-untrusted"
 
 # The agent installs the gate's scanner versions. A bump of one without the
 # other leaves the agent unable to reproduce the gate's findings.
-pin() { awk -v k="$2:" '$1==k{f=1} f&&$1=="default:"{print $2; exit}' "$1"; }
+pin() {
+  local v
+  v="$(awk -v k="$2:" '$1==k{f=1} f&&$1=="default:"{print $2; exit}' "$1")"
+  [ -n "$v" ] || fail "pins: no default for input $2 in $1"
+  echo "$v"
+}
 [ "$(pin "$root/actions/govulncheck/action.yml" version)" = "$(pin "$root/actions/security-autofix/action.yml" govulncheck-version)" ] ||
   fail "pins: govulncheck version differs between actions/govulncheck and actions/security-autofix"
 [ "$(pin "$root/actions/osv-scan/action.yml" version)" = "$(pin "$root/actions/security-autofix/action.yml" osv-scanner-version)" ] ||
@@ -61,35 +66,23 @@ echo "ok   autofix: scanner pins match the gate"
 # The permissions rule. Allowed: contents: read anywhere, and issues: write
 # (which every caller grants) on the result job only.
 python3 - "$root/.github/workflows/security.yml" <<'PY' || fail "permissions: see above"
-import re, sys
-text = open(sys.argv[1]).read()
-if re.search(r"^permissions:", text, re.M):
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+if "permissions" in wf:
     sys.exit("security.yml: workflow-level permissions would cap the autofix job; set them per job")
+allowed = {"contents": {"read"}}
 bad = []
-job = None
-inperm = False
-for line in text.splitlines():
-    m = re.match(r"^  ([a-z][a-z0-9-]*):$", line)
-    if m:
-        job, inperm = m.group(1), False
+for name, job in wf["jobs"].items():
+    perms = job.get("permissions", {})
+    if not isinstance(perms, dict):
+        bad.append(f"{name}: permissions: {perms}")
         continue
-    m = re.match(r"^    permissions:\s*(\S.*)?$", line)
-    if m:
-        if m.group(1) and not m.group(1).startswith("#"):
-            bad.append(f"{job}: permissions: {m.group(1)} (write it as a block map)")
-        inperm = True
-        continue
-    if inperm:
-        m = re.match(r"^      ([a-z-]+): *(\S+)", line)
-        if not m:
-            inperm = False
-            continue
-        perm, level = m.groups()
-        if level == "read" and perm == "contents":
-            continue
-        if job == "result" and perm == "issues" and level == "write":
-            continue
-        bad.append(f"{job}: {perm}: {level}")
+    for perm, level in perms.items():
+        ok = allowed.get(perm, set())
+        if name == "result" and perm == "issues":
+            ok = {"write"}
+        if level not in ok:
+            bad.append(f"{name}: {perm}: {level}")
 if bad:
     sys.exit("security.yml jobs ask for permissions a read-only caller lacks: " + ", ".join(bad))
 PY

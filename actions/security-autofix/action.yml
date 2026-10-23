@@ -159,18 +159,3 @@ runs:
         path: ${{ runner.temp }}/claude-execution-output.json
         retention-days: 14
         if-no-files-found: warn
-
-    # A dead fixer must not look like a quiet one. buildenv's scout-autofix
-    # died on a rate limit three days running and nothing said so.
-    # cancelled(): a job that hits its timeout is cancelled, not failed.
-    # A finished run closes the report, so it does not go stale.
-    - name: Report the auto-fix run
-      if: always()
-      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-      env:
-        REPORT_SCRIPT: ${{ github.action_path }}/report.cjs
-        OUTCOME: ${{ (failure() || cancelled()) && 'failed' || 'finished' }}
-      with:
-        script: |
-          const run = require(process.env.REPORT_SCRIPT);
-          await run({ github, context, core });

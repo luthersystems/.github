@@ -149,17 +149,26 @@ one:
   `osv-scanner` or `govulncheck ./...` reports what the gate exempts or
   leaves out, and the agent would fix those. A test fails when the agent's
   scanner pins differ from the gate's.
-- **Builds and tests run without credentials.** A bump downloads code, and
-  the job holds the OIDC request token, AWS credentials and the deploy
-  key. The agent runs every build and test through `run-untrusted`, which
-  keeps only an allowlist of variables. The App token in the git remote
-  stays readable; it can push a branch but cannot merge past branch
-  protection.
+- **Builds and tests run without credentials in their environment.** A
+  bump downloads code, and the job holds the OIDC request token, AWS
+  credentials and the deploy key's ssh-agent. The agent runs builds, tests
+  and package managers (but `go get` and `go mod tidy`) through
+  `run-untrusted`, which keeps only an allowlist of variables. It is not a
+  sandbox: code running as the same user could still read them from
+  `/proc`, the ssh-agent socket or the git remote. What such code could do:
+  spend on Bedrock, push a branch with the Claude App (it cannot merge past
+  branch protection), and read the repos the deploy key reads. A real
+  boundary (another user, or a verify job with no credentials) is a later
+  step.
+- **It does not repeat itself.** It reads the drift issue's comments and the
+  open `security-autofix/` pull requests first, and stops without a comment
+  when nothing changed.
 - **It never changes `security / result`.** The job runs after `result` and
   is not in its needs. If the agent fails (turn limit, rate limit,
-  timeout), it comments on the drift issue, or on one issue labelled
-  `security-autofix-failing` that the next finished run closes, so a dead
-  fixer does not look like a quiet one. It needs `drift-issue: true`, since
+  timeout, or a failure before the agent starts), the job's last step
+  (`actions/security-autofix-report`) comments on the drift issue, or on one
+  issue labelled `security-autofix-failing` that the next finished run
+  closes, so a dead fixer does not look like a quiet one. It needs `drift-issue: true`, since
   it reports there.
 - **It inherits its permissions.** A job of a reusable workflow that asks
   for a permission its caller did not grant stops the whole workflow at
