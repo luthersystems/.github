@@ -24,9 +24,21 @@ name: Security
 #   secrets       gitleaks over the commits a PR or push adds, or the files
 #                 at HEAD on a scheduled run.
 #   dependencies  osv-scanner over every lockfile but Go's: fail on a fixable
-#                 High or Critical.
-# A check with nothing to scan (no Go module) is skipped, which counts as
-# passed for a required check.
+#                 High or Critical. Warns about a manifest with no lockfile.
+#   iac           trivy config over Terraform, Dockerfiles, Helm,
+#                 Kubernetes, CloudFormation and ARM files: fail on a High or Critical
+#                 misconfiguration, with an expiring exemptions file.
+#   sast          Semgrep CE over Python, JavaScript and TypeScript: fail on
+#                 an ERROR security finding, with an expiring exemptions file.
+# A check with nothing to scan (no Go module, no Terraform) is skipped, which
+# counts as passed for a required check.
+#
+# Not a job: Socket. Its GitHub App already checks every PR against the org's
+# Socket policy (malware, install scripts, typosquats), and a Socket CLI job
+# would run the same policy again, with an API token in every repo and API
+# quota spent on each run. The org ruleset requires the app's check instead
+# (owner's choice, "Socket CLI and multi-language scans" thread; see
+# docs/security-workflow.md).
 #
 # Auto-fix (opt-in, input `autofix`): after a scheduled or manual run of
 # main fails govulncheck or dependencies, Claude triages the findings and
@@ -71,6 +83,36 @@ on:
         type: string
         required: false
         default: github.com/luthersystems/license
+      iac:
+        description: Run the Trivy misconfiguration scan when the repo has Terraform, Dockerfile, Helm, Kubernetes, CloudFormation or ARM files.
+        type: boolean
+        required: false
+        default: true
+      trivy-exemptions:
+        description: Trivy exemptions file, relative to the repo root.
+        type: string
+        required: false
+        default: .github/security/trivy-exemptions.txt
+      trivy-skip-dirs:
+        description: Directories or globs the Trivy scan leaves out, one per line. node_modules, .terraform, vendor and testdata are always left out.
+        type: string
+        required: false
+        default: ""
+      sast:
+        description: Run the Semgrep scan when the repo has Python, JavaScript or TypeScript files.
+        type: boolean
+        required: false
+        default: true
+      semgrep-exemptions:
+        description: Semgrep exemptions file, relative to the repo root.
+        type: string
+        required: false
+        default: .github/security/semgrep-exemptions.txt
+      semgrep-exclude:
+        description: Globs the Semgrep scan leaves out, one per line.
+        type: string
+        required: false
+        default: ""
       drift-issue:
         description: Open a security-drift issue when a scheduled run fails.
         type: boolean
@@ -119,6 +161,8 @@ jobs:
     outputs:
       go-directories: ${{ steps.detect.outputs.go-directories }}
       go-version-file: ${{ steps.detect.outputs.go-version-file }}
+      iac: ${{ steps.detect.outputs.iac }}
+      code: ${{ steps.detect.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,6 +171,8 @@ jobs:
         uses: luthersystems/.github/actions/security-detect@v1
         with:
           go-directories: ${{ inputs.go-directories }}
+          trivy-skip-dirs: ${{ inputs.trivy-skip-dirs }}
+          semgrep-exclude: ${{ inputs.semgrep-exclude }}
 
   govulncheck:
     needs: detect
@@ -215,10 +261,61 @@ jobs:
         with:
           exclude: ${{ inputs.osv-exclude }}
 
+  iac:
+    needs: detect
+    if: needs.detect.outputs.iac == 'true' && inputs.iac
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Go only to build the pinned Trivy, at the Go its go.mod names: the
+      # trivy-config action pins that Go (TOOL_GOTOOLCHAIN) because a newer
+      # one fails the build, so any other version here is a second download.
+      # tests/security/autofix-test.sh checks the two stay equal.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.25.6
+          cache: false
+      # The gate is a Python script; pinned so it does not depend on the
+      # runner image (a self-hosted runner may have an old python3 or none).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: luthersystems/.github/actions/trivy-config@v1
+        with:
+          exemptions: ${{ inputs.trivy-exemptions }}
+          skip-dirs: ${{ inputs.trivy-skip-dirs }}
+
+  sast:
+    needs: detect
+    if: needs.detect.outputs.code == 'true' && inputs.sast
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Semgrep needs Python 3.10 or later and installs only the hashed wheels
+      # in its requirements.txt, so the Python is pinned rather than taken
+      # from the runner image; a stable Python also keeps the venv cache warm.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: luthersystems/.github/actions/semgrep@v1
+        with:
+          exemptions: ${{ inputs.semgrep-exemptions }}
+          exclude: ${{ inputs.semgrep-exclude }}
+
   # The one check a ruleset requires. It runs even when a check failed or was
   # skipped, and passes only when every check passed or had nothing to scan.
   result:
-    needs: [detect, govulncheck, gosec, secrets, dependencies]
+    needs: [detect, govulncheck, gosec, secrets, dependencies, iac, sast]
     if: always()
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: 5

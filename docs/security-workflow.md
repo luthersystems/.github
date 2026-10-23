@@ -28,16 +28,36 @@ repo when `v1` moves.
 | `govulncheck` | the repo has a Go module | a called vulnerability (source mode on every run, binary mode too on a scheduled run) | a row in `.github/security/govulncheck-exemptions.txt` |
 | `gosec` | the repo has a Go module | a gosec finding, through golangci-lint and the repo's own `.golangci.yml` | the repo's `.golangci.yml` exclusions, or `//nolint:gosec // reason` |
 | `secrets` | always | a secret (key, token) in the commits a PR or push adds, or in the files at HEAD on a scheduled run | its fingerprint in `.gitleaksignore`, or the allowlist of `.gitleaks.toml` |
-| `dependencies` | always (passes when there is no lockfile) | a fixable High or Critical vulnerability in a lockfile that is not Go's | an `[[IgnoredVulns]]` row in `osv-scanner.toml` |
+| `dependencies` | always (passes when there is no lockfile) | a fixable High or Critical vulnerability in a lockfile that is not Go's. It also warns, without failing, about a `package.json` with no lockfile and a `requirements*.txt` line with no `==` pin | an `[[IgnoredVulns]]` row in `osv-scanner.toml` |
+| `iac` | git tracks a Terraform, Dockerfile, Helm, Kubernetes, CloudFormation or ARM file outside `trivy-skip-dirs` | a High or Critical misconfiguration that `trivy config` finds | a row in `.github/security/trivy-exemptions.txt`, or an inline `#trivy:ignore:<id>:exp:YYYY-MM-DD` |
+| `sast` | git tracks a Python, JavaScript or TypeScript file outside `semgrep-exclude` | a Semgrep finding that is ERROR severity, category security, and MEDIUM or HIGH confidence | a row in `.github/security/semgrep-exemptions.txt`, or an inline `# nosemgrep: <rule-id>` |
 | `result` | always | any job above that failed or was cancelled | — |
 
 A job with nothing to scan is skipped, which counts as passed. So the one
 check to require is `security / result`, in every repo.
 
 Each tool is pinned (govulncheck v1.8.0, golangci-lint v2.15.0, gitleaks
-v8.30.1, osv-scanner v2.6.0) and installed with `go install`, which checks the
-module against the Go checksum database. A new tool version is a change to
-this repo, reviewed once.
+v8.30.1, osv-scanner v2.6.0, Trivy v0.69.3) and installed with `go install`,
+which checks the module against the Go checksum database. Semgrep (1.180.0)
+is a Python package, so pip installs it from a file that pins it and every
+dependency to a hash. Trivy v0.69.3 builds only with the Go its `go.mod`
+names (1.25.6), so the action pins that Go for the build, and the `iac` job
+sets up that same Go (a test keeps the two equal), so a cold run downloads
+one Go, not two. The `iac` and `sast` jobs set up Python 3.12, so the gates
+and Semgrep's hashed wheels do not depend on the runner image. Semgrep's
+venv is cached, keyed on the Python and the hash of its requirements file.
+Semgrep's rules come from a pinned commit of
+[semgrep/semgrep-rules](https://github.com/semgrep/semgrep-rules), not from
+the registry, which changes every day. Trivy uses the checks built into its
+release (`--skip-check-update`) for the same reason. A new tool or rules
+version is a change to this repo, reviewed once.
+
+Why Trivy is built from source: on 2026-03-19 the tags of
+`aquasecurity/trivy-action` were moved to a credential stealer, and a
+malicious Trivy v0.69.4 binary was published (CVE-2026-33634). A `go install`
+of a pinned version builds the source that the Go checksum database recorded
+for it, so a moved tag or a swapped binary cannot reach us. v0.69.3 is the
+release Aqua named as safe.
 
 ### The fail rule
 
@@ -51,6 +71,24 @@ unless a reviewed exemption with an expiry date covers it.
   Socket and Dependabot alerts still report them.
 - Go modules are left to govulncheck, which reports only code the module
   calls. osv-scanner would fail on every vulnerable module in `go.mod`.
+- Trivy reports only High and Critical. A repo's findings on the day it
+  adopts the check go into its exemptions file, each row with an expiry date
+  and an issue (the owner's choice: "fail on High/Critical; baseline"). New
+  findings block at once, and old ones have a deadline.
+- Semgrep blocks only ERROR rules of category security with MEDIUM or HIGH
+  confidence. The owner chose "block ERROR only". Within ERROR, a
+  LOW-confidence rule is an audit hint ("this calls subprocess; check it")
+  that fires on safe code too: on the day the check was added, every
+  security finding across our repos came from one, and none was a real bug.
+  Those, and ERROR rules of other categories, print as warnings.
+- Semgrep and Trivy leave out `testdata/`, `vendor/` and `node_modules/`:
+  fixtures and third-party code are not ours to fix. That list, plus
+  `semgrep-exclude` or `trivy-skip-dirs`, is the whole list: Semgrep's own
+  default list (which skips `tests/`, `build/`, `dist/` and `*.min.js`) is
+  turned off, since that is our code too.
+- A Dockerfile is what Trivy calls one: `Dockerfile` or `Containerfile`
+  with at most one extension, or a name that ends in `.dockerfile`. A script
+  named `dockerfile-lint.sh` does not start the `iac` job.
 
 ### Not in the workflow
 
@@ -58,8 +96,14 @@ unless a reviewed exemption with an expiry date covers it.
   that ship images keep calling `actions/harden-check` in that job.
 - **Image CVE scans** (Trivy, Grype or Docker Scout) are a later step. Today
   only buildenv runs them.
-- **Socket** is a GitHub App, not a workflow step. It runs on every repo it
-  is installed on.
+- **Socket** is a GitHub App, not a workflow step. It checks every PR in the
+  repos it is installed on against the org's Socket policy (malware, install
+  scripts, typosquats), which osv-scanner does not. A Socket CLI job
+  (`socket ci`) would run the same policy on the same data a second time,
+  need a Socket API token in every repo, and spend API quota on each run. So
+  the owner chose to keep the app and require its check,
+  `Socket Security: Pull Request Alerts`, in the org ruleset instead (see
+  [The org ruleset](#the-org-ruleset)).
 
 ## How a repo calls it
 
@@ -107,6 +151,12 @@ The caller's job id must be `security`, so the check is named
 | `gosec` | `true` | never, unless gosec cannot type-check the repo yet |
 | `osv-exclude` | none | a directory holds test lockfiles with known vulnerabilities |
 | `goprivate` | `github.com/luthersystems/license` | the repo imports another private module |
+| `iac` | `true` | never, unless the repo's infrastructure files are scanned another way |
+| `trivy-exemptions` | `.github/security/trivy-exemptions.txt` | the repo keeps its exemptions elsewhere |
+| `trivy-skip-dirs` | none (`node_modules`, `.terraform`, `vendor` and `testdata` always) | a directory holds fixtures that are insecure on purpose |
+| `sast` | `true` | never, unless Semgrep cannot parse the repo's code |
+| `semgrep-exemptions` | `.github/security/semgrep-exemptions.txt` | the repo keeps its exemptions elsewhere |
+| `semgrep-exclude` | none (`testdata`, `vendor` and `node_modules` always) | generated or third-party code |
 | `drift-issue` | `true` | the repo tracks scheduled failures another way |
 | `runs-on` | `ubuntu-latest` | the repo needs a self-hosted runner |
 | `autofix` | `false` | the repo wants Claude to propose fixes for scheduled scan failures (see [Auto-fix](#auto-fix)) |
@@ -228,6 +278,28 @@ reason = "dev-only dependency; upstream fix tracked in luthersystems/onboard#123
 
 The gate refuses a row with no `ignoreUntil` or no `reason`.
 
+Trivy and Semgrep, one row per rule and file. The path is the file, from
+the repo root, or a glob: `*` and `?` stay inside one directory, `**`
+crosses directories, and `[ ]` are literal, so a path the error prints
+always matches itself. The error prints the row to add:
+
+```text
+# .github/security/trivy-exemptions.txt (or semgrep-exemptions.txt)
+# id | path | expires (YYYY-MM-DD) | issue | reason
+AWS-0086 | aws/s3/main.tf | 2027-01-31 | luthersystems/tf-modules#90 | the preset's public bucket is for a static site
+python.lang.security.audit.subprocess-shell-true | scripts/**/*.py | 2027-01-31 | luthersystems/mars#200 | build scripts, arguments are ours
+```
+
+A Trivy id may be written `AWS-0086` or `AVD-AWS-0086`. A row that covers no
+finding prints a warning, so it can be deleted. An inline exemption must
+carry the same facts: Trivy's `#trivy:ignore:<id>` (or the older
+`#tfsec:ignore:<id>`) must end in `:exp:YYYY-MM-DD`, and `# nosemgrep` (or
+`# nosem`) must name the rule (`# nosemgrep: <rule-id>`) and say why. Both
+checks fail otherwise. The Trivy check ignores `.trivyignore`,
+`.trivyignore.yaml` and `trivy.yaml`, and the Semgrep check ignores
+`.semgrepignore`. Each warns when such a file exists: it could drop a
+finding with no expiry.
+
 gitleaks: rotate the secret first. A false positive goes in `.gitleaksignore`
 as the fingerprint the log prints (`commit:file:rule:line` for a commit,
 `file:rule:line` for a scheduled scan).
@@ -259,6 +331,12 @@ An org owner adds it at
 6. **Rules**: tick only **Require status checks to pass**. Under it:
    - **Add checks** → type `security / result`, and pick the
      **GitHub Actions** source, so another app cannot report the name.
+   - **Add checks** → type `Socket Security: Pull Request Alerts`, and pick
+     the **Socket Security** app as its source. The app reports it on every
+     PR (it passes when the PR changes no dependency), so it cannot block a
+     PR by not running. Only repos the app is installed on report it, so
+     install the app on every repo first (org settings → GitHub Apps →
+     Socket Security → **All repositories**).
    - Leave **Require branches to be up to date** off: the check does not
      depend on the base.
    - Tick **Do not require status checks on creation**, so a new repo can
@@ -273,7 +351,8 @@ list in the same step.
 
 ## Tests
 
-`tests/security/security-test.sh` runs each check on fixtures that must fail
+`tests/security/security-test.sh` runs each check (Trivy and Semgrep
+included, with the lockfile warning) on fixtures that must fail
 and on fixtures that must pass, and asserts the reason in the log.
 `tests/security/drift-test.cjs` tests the drift issue logic, and
 `tests/security/osv_gate_test.py` tests how the osv gate orders versions and

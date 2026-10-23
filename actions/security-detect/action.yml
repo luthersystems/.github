@@ -13,6 +13,17 @@ inputs:
     description: Module directories to scan, space separated. Empty means detect.
     required: false
     default: ""
+  trivy-skip-dirs:
+    description: >-
+      The Trivy job's skip-dirs, one per line. Files under them do not count
+      for iac, so a repo whose only infrastructure files are skipped does not
+      build Trivy to scan nothing.
+    required: false
+    default: ""
+  semgrep-exclude:
+    description: The Semgrep job's excludes, one per line; the same, for code.
+    required: false
+    default: ""
 outputs:
   go-directories:
     description: Module directories, space separated (empty when none).
@@ -21,7 +32,7 @@ outputs:
     description: The go.mod that asks for the newest Go (toolchain line, else go line), so every module builds.
     value: ${{ steps.find.outputs.go-version-file }}
   iac:
-    description: "'true' when git tracks a Terraform, Dockerfile, Helm or Kubernetes file."
+    description: "'true' when git tracks a Terraform, Dockerfile, Helm, Kubernetes, CloudFormation or ARM file."
     value: ${{ steps.files.outputs.iac }}
   code:
     description: "'true' when git tracks a Python, JavaScript or TypeScript file."
@@ -54,4 +65,7 @@ runs:
         echo "Go modules: ${dirs:-none}"
     - id: files
       shell: bash
+      env:
+        SKIP_DIRS: ${{ inputs.trivy-skip-dirs }}
+        EXCLUDE: ${{ inputs.semgrep-exclude }}
       run: bash "$GITHUB_ACTION_PATH/find-files.sh" >>"$GITHUB_OUTPUT"

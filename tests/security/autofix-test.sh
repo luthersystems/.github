@@ -63,6 +63,15 @@ pin() {
   fail "pins: osv-scanner version differs between actions/osv-scan and actions/security-autofix"
 echo "ok   autofix: scanner pins match the gate"
 
+# The iac job's setup-go must install the Go the trivy-config action builds
+# Trivy with, or every cold run downloads a second Go (see security.yml).
+wf_go="$(awk '/^  iac:/{f=1} f&&$1=="go-version:"{print $2; exit}' "$root/.github/workflows/security.yml")"
+tv_go="$(awk '$1=="TOOL_GOTOOLCHAIN:"{sub(/^go/,"",$2); print $2; exit}' "$root/actions/trivy-config/action.yml")"
+if [ -z "$wf_go" ] || [ "$wf_go" != "$tv_go" ]; then
+  fail "pins: security.yml iac go-version '$wf_go' differs from trivy-config TOOL_GOTOOLCHAIN '$tv_go'"
+fi
+echo "ok   autofix: the iac job's Go is the one Trivy builds with"
+
 # The permissions rule. Allowed: contents: read anywhere, and issues: write
 # (which every caller grants) on the result job only.
 python3 - "$root/.github/workflows/security.yml" <<'PY' || fail "permissions: see above"
