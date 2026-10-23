@@ -41,3 +41,6 @@ jobs:
       # tests/security/testdata holds lockfiles that are vulnerable on
       # purpose, to test the checks; they are not dependencies of anything.
       osv-exclude: tests
+      # tests/ also holds Dockerfiles that are unhardened on purpose, to
+      # test harden-check.
+      trivy-skip-dirs: tests
