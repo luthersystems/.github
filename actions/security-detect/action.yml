@@ -2,8 +2,11 @@ name: security detect
 description: Find what the security workflow should scan in this repo.
 
 # Why a separate step: the workflow skips the Go jobs in a repo with no Go
-# module, and reports them as skipped rather than as a failed setup. A skipped
-# job counts as passed for a required check, so one workflow fits every repo.
+# module, the Trivy job in a repo with no infrastructure file, and the
+# Semgrep job in a repo with no Python or JS/TS, and reports them as skipped
+# rather than as a failed setup. A skipped job counts as passed for a
+# required check, so one workflow fits every repo, and a Go-only private repo
+# does not pay the minutes to install scanners that would find nothing.
 
 inputs:
   go-directories:
@@ -17,6 +20,12 @@ outputs:
   go-version-file:
     description: The go.mod that asks for the newest Go (toolchain line, else go line), so every module builds.
     value: ${{ steps.find.outputs.go-version-file }}
+  iac:
+    description: "'true' when git tracks a Terraform, Dockerfile, Helm or Kubernetes file."
+    value: ${{ steps.files.outputs.iac }}
+  code:
+    description: "'true' when git tracks a Python, JavaScript or TypeScript file."
+    value: ${{ steps.files.outputs.code }}
 
 runs:
   using: composite
@@ -43,3 +52,6 @@ runs:
         done
         echo "go-version-file=$best" >>"$GITHUB_OUTPUT"
         echo "Go modules: ${dirs:-none}"
+    - id: files
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/find-files.sh" >>"$GITHUB_OUTPUT"
