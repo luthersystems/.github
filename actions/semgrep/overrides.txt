@@ -1,0 +1,6 @@
+# semgrep 1.180.0 (and every later release so far) pins mcp==1.29.0, which has
+# CVE-2026-59951 (GHSA-84m7-p3x7-pcfv, fixed in 1.30.0). The flaw is in the
+# Streamable HTTP server that only `semgrep mcp` starts; `semgrep scan` never
+# runs it. Overriding the pin clears the finding without an exemption, so
+# osv-scan stays clean here. Drop this file once semgrep's own pin moves.
+mcp==1.30.0

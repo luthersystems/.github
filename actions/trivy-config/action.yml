@@ -1,0 +1,64 @@
+name: Trivy config gate
+description: >-
+  Scan Terraform, Dockerfiles, Kubernetes and Helm files with `trivy config`
+  and fail on a High or Critical misconfiguration with no live exemption.
+
+# Why Trivy: one tool covers every kind of infrastructure file our repos
+# hold (Terraform in the infra and preset repos, Dockerfiles in most service
+# repos, Kubernetes and Helm in mars and ui-infrastructure). The owner chose
+# it over Checkov in the "Socket CLI and multi-language scans" thread.
+#
+# Why built from source with go install and not aquasecurity/trivy-action or
+# a release binary: on 2026-03-19 trivy-action's tags were moved to a
+# credential stealer, and a malicious v0.69.4 binary was published
+# (CVE-2026-33634). go install checks the module against the Go checksum
+# database, so the binary is built from the source that was published under
+# the pinned version and cannot change after. v0.69.3 is the release
+# Aqua named as safe.
+#
+# Needs: Go on PATH to build Trivy, and python3.
+
+inputs:
+  exemptions:
+    description: Exemptions file, relative to the repo root (format in actions/lib/path_exemptions.py).
+    required: false
+    default: .github/security/trivy-exemptions.txt
+  skip-dirs:
+    description: Directories or globs to leave out, one per line.
+    required: false
+    default: ""
+  version:
+    description: Trivy version. Pinned so a release cannot change a result with no change in the repo.
+    required: false
+    default: v0.69.3
+
+runs:
+  using: composite
+  steps:
+    # Restores the binary this repo built for this version, if any. A build
+    # takes about 4 minutes, so the cache matters more here than for the
+    # other tools (see lib/go-install.sh).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/trivy-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-trivy-${{ inputs.version }}
+    - name: Install trivy
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        DIR: ${{ runner.temp }}/luther-tools/trivy-${{ inputs.version }}
+        # Trivy's releases are built with this experiment; without it the
+        # build fails on encoding/json/v2.
+        GOEXPERIMENT: jsonv2
+        # The Go that Trivy's go.mod names. A newer Go can fail the build:
+        # encoding/json/v2 is an experiment and changes between releases
+        # (Go 1.27 dropped the json.SkipFunc that v0.69.3 uses). Bump with
+        # the version input.
+        TOOL_GOTOOLCHAIN: go1.25.6
+      run: bash "$GITHUB_ACTION_PATH/../lib/go-install.sh" "$DIR" "github.com/aquasecurity/trivy/cmd/trivy@${VERSION}" trivy
+    - name: Run trivy config
+      shell: bash
+      env:
+        EXEMPTIONS: ${{ inputs.exemptions }}
+        SKIP_DIRS: ${{ inputs.skip-dirs }}
+      run: bash "$GITHUB_ACTION_PATH/trivy-config.sh"

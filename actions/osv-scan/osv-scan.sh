@@ -27,6 +27,15 @@ while IFS= read -r ex; do
   [ -n "$ex" ] && args+=(--experimental-exclude "$ex")
 done <<<"${EXCLUDE:-}"
 
+# Warnings only: a manifest with no lockfile is not scanned at all.
+lock_args=()
+while IFS= read -r ex; do
+  [ -n "$ex" ] && lock_args+=(--exclude "$ex")
+done <<<"${EXCLUDE:-}"
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  python3 "$here/lockfile-check.py" "${lock_args[@]}" || true
+fi
+
 status=0
 osv-scanner "${args[@]}" . >"$tmp/osv-scanner.log" 2>&1 || status=$?
 # 0 = no vulnerability, 1 = some found. Anything else means the scan did not

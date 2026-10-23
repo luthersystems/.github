@@ -16,6 +16,9 @@ mkdir -p "$dir"
 if [ ! -x "$dir/$bin" ]; then
   # GOFLAGS and GOWORK are the caller's settings for its own code (for
   # example -mod=vendor); they must not change how a pinned tool builds.
-  GOTOOLCHAIN=auto GOFLAGS="" GOWORK=off GOBIN="$dir" go install "$mod"
+  # TOOL_GOTOOLCHAIN lets an action pin the Go a tool needs (Trivy, see
+  # trivy-config/action.yml); auto otherwise, so a tool that needs a newer
+  # Go than the runner's still builds.
+  GOTOOLCHAIN="${TOOL_GOTOOLCHAIN:-auto}" GOFLAGS="" GOWORK=off GOBIN="$dir" go install "$mod"
 fi
 echo "$dir" >>"${GITHUB_PATH:-/dev/null}"

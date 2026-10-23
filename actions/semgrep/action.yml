@@ -1,0 +1,94 @@
+name: Semgrep gate
+description: >-
+  Scan Python, JavaScript and TypeScript with Semgrep CE and pinned rules,
+  and fail on an ERROR security finding with no live exemption.
+
+# Why Semgrep CE: it covers Python and JS/TS in private repos at no cost
+# (CodeQL is free only on public repos), runs offline, and is to these
+# languages what gosec is to Go. The owner chose it in the "Socket CLI and
+# multi-language scans" thread.
+#
+# Why the rules come from a pinned commit of semgrep/semgrep-rules and not
+# from the registry (`--config p/python`): a registry ruleset changes every
+# day, so a merge could fail with no change in the repo. A new rules commit
+# is a change to this repo, reviewed once. The rules are under the Semgrep
+# Rules License v1.0, which allows this internal use.
+#
+# Why pip with --require-hashes: Semgrep is a Python package, and
+# requirements.txt pins it and every dependency to the hash of the file
+# that was reviewed (regenerate with: uv pip compile --universal
+# --generate-hashes --python-version 3.10 --override overrides.txt
+# requirements.in -o requirements.txt).
+#
+# Needs: python3 >= 3.10 (the runner's).
+
+inputs:
+  exemptions:
+    description: Exemptions file, relative to the repo root (format in actions/lib/path_exemptions.py).
+    required: false
+    default: .github/security/semgrep-exemptions.txt
+  exclude:
+    description: Globs to leave out, one per line (Semgrep --exclude).
+    required: false
+    default: ""
+  languages:
+    description: semgrep-rules directories to load, space separated.
+    required: false
+    default: python javascript typescript
+  rules-ref:
+    description: >-
+      Commit of semgrep/semgrep-rules. Pinned for the same reason as the
+      Semgrep version.
+    required: false
+    default: a84ff9cc2453ca91d581380de4b8b3f272f6f4be
+
+runs:
+  using: composite
+  steps:
+    - name: Install semgrep
+      shell: bash
+      env:
+        VENV: ${{ runner.temp }}/luther-tools/semgrep-venv
+        BIN: ${{ runner.temp }}/luther-tools/semgrep-bin
+      run: |
+        set -euo pipefail
+        python3 -m venv "$VENV"
+        # --no-deps: requirements.txt already lists every dependency, hashed,
+        # and overrides semgrep's mcp pin (see overrides.txt), which pip's
+        # resolver would refuse.
+        "$VENV/bin/pip" install --quiet --disable-pip-version-check --require-hashes --only-binary=:all: \
+          --no-deps -r "$GITHUB_ACTION_PATH/requirements.txt"
+        # Put only semgrep on PATH: the venv's bin also holds python3 and
+        # pip, which would shadow the runner's for the caller's later steps
+        # (a python3 without the runner's packages, such as PyYAML).
+        mkdir -p "$BIN"
+        ln -sf "$VENV/bin/semgrep" "$BIN/semgrep"
+        echo "$BIN" >>"$GITHUB_PATH"
+    - name: Check out the pinned rules
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: semgrep/semgrep-rules
+        ref: ${{ inputs.rules-ref }}
+        path: .luther-semgrep-rules
+        persist-credentials: false
+    # actions/checkout can only write inside the workspace, so the rules are
+    # moved out at once: left there, Semgrep (which scans untracked files)
+    # and any later scan in the caller's job would read the rules' own
+    # deliberately vulnerable test files, and the caller's tree would show
+    # an untracked directory.
+    - name: Move the rules out of the workspace
+      shell: bash
+      env:
+        DEST: ${{ runner.temp }}/luther-semgrep-rules
+      run: |
+        set -euo pipefail
+        rm -rf "$DEST"
+        mv .luther-semgrep-rules "$DEST"
+    - name: Run semgrep
+      shell: bash
+      env:
+        RULES: ${{ runner.temp }}/luther-semgrep-rules
+        LANGS: ${{ inputs.languages }}
+        EXEMPTIONS: ${{ inputs.exemptions }}
+        EXCLUDE: ${{ inputs.exclude }}
+      run: bash "$GITHUB_ACTION_PATH/semgrep.sh"

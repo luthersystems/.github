@@ -159,7 +159,18 @@ jobs:
         with:
           exclude: tests
 
+      - name: "Pass: trivy config on this repo, fixtures left out"
+        uses: ./actions/trivy-config
+        with:
+          skip-dirs: tests
+      - name: "Pass: semgrep on this repo"
+        uses: ./actions/semgrep
+
       - name: Fail and pass cases of each check
+        # The semgrep step above left semgrep on PATH and the pinned rules
+        # in the workspace; the test script runs its cases against them.
+        env:
+          RULES: ${{ runner.temp }}/luther-semgrep-rules
         run: bash tests/security/security-test.sh
       - name: Drift issue cases
         run: node tests/security/drift-test.cjs
