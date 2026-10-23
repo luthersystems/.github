@@ -28,10 +28,13 @@ done
 # the fail rule says every exemption has one, so a comment without it fails.
 # Trivy also honours tfsec's older `tfsec:ignore:<id>`. Only a comment counts
 # (`#` or `//` before it), and only in the file types Trivy reads inline
-# ignores from, so prose that names the syntax does not fail the gate.
+# ignores from (Dockerfiles by Trivy's own name test, see
+# security-detect/find-files.sh), so prose that names the syntax, or a
+# script named dockerfile-lint.sh, does not fail the gate.
 noexp="$(git grep -nE '(#|//)[[:space:]]*(trivy|tfsec):ignore:' -- \
   '*.tf' '*.tf.json' '*.tfvars' '*.hcl' '*.yaml' '*.yml' '*.json' \
-  '*Dockerfile*' '*dockerfile*' '*Containerfile*' "${excl[@]}" 2>/dev/null |
+  ':(glob)**/Dockerfile' ':(glob)**/Dockerfile.*' ':(glob)**/Containerfile' ':(glob)**/Containerfile.*' \
+  ':(glob,icase)**/*.dockerfile' ':(glob,icase)**/*.containerfile' "${excl[@]}" 2>/dev/null |
   grep -v ':exp:' || true)"
 if [ -n "$noexp" ]; then
   while IFS= read -r hit; do

@@ -20,7 +20,8 @@ description: >-
 # --generate-hashes --python-version 3.10 --override overrides.txt
 # requirements.in -o requirements.txt).
 #
-# Needs: python3 >= 3.10 (the runner's).
+# Needs: python3 >= 3.10 on PATH. The shared workflow sets up a pinned
+# Python first, so the hashed wheels match and the venv cache key is stable.
 
 inputs:
   exemptions:
@@ -45,6 +46,22 @@ inputs:
 runs:
   using: composite
   steps:
+    # Why a cache: building the venv downloads Semgrep and every pinned
+    # dependency from PyPI on each run, which costs minutes in every repo and
+    # fails the check on a PyPI outage. The key holds the Python (a venv is
+    # tied to the interpreter it was made with) and the hash of
+    # requirements.txt, so a version bump builds a new venv.
+    - id: key
+      shell: bash
+      run: |
+        set -euo pipefail
+        py="$(python3 -c 'import sys; print(sys.executable, sys.version.split()[0])' | sha256sum | cut -c1-16)"
+        req="$(sha256sum "$GITHUB_ACTION_PATH/requirements.txt" | cut -c1-16)"
+        echo "key=luther-tool-${RUNNER_OS}-${RUNNER_ARCH}-semgrep-${py}-${req}" >>"$GITHUB_OUTPUT"
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/luther-tools/semgrep-venv
+        key: ${{ steps.key.outputs.key }}
     - name: Install semgrep
       shell: bash
       env:
@@ -52,12 +69,16 @@ runs:
         BIN: ${{ runner.temp }}/luther-tools/semgrep-bin
       run: |
         set -euo pipefail
-        python3 -m venv "$VENV"
-        # --no-deps: requirements.txt already lists every dependency, hashed,
-        # and overrides semgrep's mcp pin (see overrides.txt), which pip's
-        # resolver would refuse.
-        "$VENV/bin/pip" install --quiet --disable-pip-version-check --require-hashes --only-binary=:all: \
-          --no-deps -r "$GITHUB_ACTION_PATH/requirements.txt"
+        # A restored venv is used only if it still runs; else build it again.
+        if ! "$VENV/bin/semgrep" --version >/dev/null 2>&1; then
+          rm -rf "$VENV"
+          python3 -m venv "$VENV"
+          # --no-deps: requirements.txt already lists every dependency,
+          # hashed, and overrides semgrep's mcp pin (see overrides.txt),
+          # which pip's resolver would refuse.
+          "$VENV/bin/pip" install --quiet --disable-pip-version-check --require-hashes --only-binary=:all: \
+            --no-deps -r "$GITHUB_ACTION_PATH/requirements.txt"
+        fi
         # Put only semgrep on PATH: the venv's bin also holds python3 and
         # pip, which would shadow the runner's for the caller's later steps
         # (a python3 without the runner's packages, such as PyYAML).

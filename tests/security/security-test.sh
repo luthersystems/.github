@@ -119,6 +119,35 @@ expect pass "osv: an unpinned requirements file warns" "Unpinned requirements" -
 printf 'tomli>=2; python_version == "3.10"\n' >requirements.txt
 expect pass "osv: a marker's == does not hide an unpinned range" "Unpinned requirements" -- bash "$osv"
 
+# --- security detect -------------------------------------------------------
+ff="$root/actions/security-detect/find-files.sh"
+det="$work/detect"
+mkdir -p "$det" && cd "$det" && git init -q .
+add() { mkdir -p "$(dirname "$1")" && printf '%s\n' "${2:-x}" >"$1" && git add "$1"; }
+expect pass "detect: nothing to scan" "^iac=false$" -- bash "$ff"
+add scripts/dockerfile-lint.sh
+expect pass "detect: a script named like a Dockerfile is not one" "^iac=false$" -- bash "$ff"
+add tests/Dockerfile 'FROM alpine'
+expect pass "detect: a Dockerfile counts" "^iac=true$" -- bash "$ff"
+expect pass "detect: not when its directory is a Trivy skip-dir" "^iac=false$" -- env SKIP_DIRS=tests bash "$ff"
+add infra/app.Dockerfile 'FROM alpine'
+expect pass "detect: <x>.Dockerfile counts" "^iac=true$" -- env SKIP_DIRS=tests bash "$ff"
+git rm -q --cached infra/app.Dockerfile
+add cfn/stack.yaml 'AWSTemplateFormatVersion: "2010-09-09"'
+expect pass "detect: a CloudFormation template counts" "^iac=true$" -- env SKIP_DIRS=tests bash "$ff"
+git rm -q --cached cfn/stack.yaml
+# shellcheck disable=SC2016 # a literal ARM $schema key
+add arm/main.json '{"$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"}'
+expect pass "detect: an ARM template counts" "^iac=true$" -- env SKIP_DIRS=tests bash "$ff"
+add pkg/tests/a.py
+expect pass "detect: Python counts" "^code=true$" -- bash "$ff"
+expect pass "detect: not under a Semgrep exclude, at any depth" "^code=false$" -- env EXCLUDE=tests bash "$ff"
+# More paths than a pipe holds: an early exit of a reader must not turn a
+# match into no match (the bug was grep -q under pipefail).
+mkdir -p many && (cd many && seq -f 'f%.0f_with_a_long_name_to_fill_the_pipe.py' 1 4000 | xargs touch) && git add many
+expect pass "detect: a large repo still finds code" "^code=true$" -- bash "$ff"
+cd "$root" || exit 1
+
 # --- trivy config ----------------------------------------------------------
 tv="$root/actions/trivy-config/trivy-config.sh"
 mkdir -p "$work/iac"
@@ -212,6 +241,17 @@ mkdir -p rules && cp -r "$RULES/python" rules/
 expect pass "semgrep: ids are the registry's with the rules under the repo" "Semgrep finding exempted" -- \
   env RULES=rules LANGS=python EXEMPTIONS=.github/security/semgrep-exemptions.txt EXCLUDE=rules bash "$sg"
 rm -rf rules .github/security/semgrep-exemptions.txt
+# A .semgrepignore, or Semgrep's own default list (which skips tests/),
+# must not hide a finding: exemptions go through the exemptions file.
+mkdir -p tests && cp "$fx/sast-vuln/app.py" tests/app.py
+printf 'tests/\n' >.semgrepignore
+git add . && git -c user.email=t@e -c user.name=t commit -qm t
+expect fail "semgrep: a .semgrepignore cannot hide a finding" "Semgrep setting not used.*tests/app.py|tests/app.py.*not exempted" -- \
+  env RULES="$RULES" LANGS=python EXCLUDE='app' bash "$sg"
+git rm -q .semgrepignore && git -c user.email=t@e -c user.name=t commit -qm s
+expect fail "semgrep: code under tests/ is scanned" "file=tests/app.py,.*not exempted" -- \
+  env RULES="$RULES" LANGS=python EXCLUDE='app' bash "$sg"
+git rm -rq tests && git -c user.email=t@e -c user.name=t commit -qm r
 
 # --- gitleaks --------------------------------------------------------------
 gl="$root/actions/gitleaks/gitleaks.sh"

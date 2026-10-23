@@ -31,7 +31,18 @@ fi
 # --metrics=off: send nothing to semgrep.dev. The rules checkout must sit
 # outside the repo (action.yml moves it to RUNNER_TEMP): Semgrep scans
 # untracked files too, and the rules' own test files are full of findings.
-args=(scan --metrics=off --disable-version-check --quiet --severity ERROR --json --output "$out")
+# Why --x-ignore-semgrepignore-files: Semgrep reads a .semgrepignore at the
+# repo root, so a repo could drop a whole directory from the scan with no
+# expiry, issue or reason; every exemption goes through the exemptions file
+# instead. With no .semgrepignore, Semgrep falls back to a built-in list that
+# skips tests/, test/, build/, dist/ and *.min.js, which is our code too.
+# The flag turns both off; the excludes below are the whole list. (An x-
+# flag can change between releases; semgrep is pinned in requirements.txt.)
+for f in $(git ls-files -- '.semgrepignore' '**/.semgrepignore' 2>/dev/null); do
+  echo "::warning file=$f,title=Semgrep setting not used::the gate ignores $f; put exemptions in ${EXEMPTIONS:-the exemptions file}, or a directory in the workflow's semgrep-exclude"
+done
+args=(scan --metrics=off --disable-version-check --quiet --severity ERROR --json --output "$out"
+      --x-ignore-semgrepignore-files)
 for l in ${LANGS:-python javascript typescript}; do
   args+=(--config "$rules/$l")
 done

@@ -29,8 +29,8 @@ repo when `v1` moves.
 | `gosec` | the repo has a Go module | a gosec finding, through golangci-lint and the repo's own `.golangci.yml` | the repo's `.golangci.yml` exclusions, or `//nolint:gosec // reason` |
 | `secrets` | always | a secret (key, token) in the commits a PR or push adds, or in the files at HEAD on a scheduled run | its fingerprint in `.gitleaksignore`, or the allowlist of `.gitleaks.toml` |
 | `dependencies` | always (passes when there is no lockfile) | a fixable High or Critical vulnerability in a lockfile that is not Go's. It also warns, without failing, about a `package.json` with no lockfile and a `requirements*.txt` line with no `==` pin | an `[[IgnoredVulns]]` row in `osv-scanner.toml` |
-| `iac` | git tracks a Terraform, Dockerfile, Helm or Kubernetes file | a High or Critical misconfiguration that `trivy config` finds | a row in `.github/security/trivy-exemptions.txt`, or an inline `#trivy:ignore:<id>:exp:YYYY-MM-DD` |
-| `sast` | git tracks a Python, JavaScript or TypeScript file | a Semgrep finding that is ERROR severity, category security, and MEDIUM or HIGH confidence | a row in `.github/security/semgrep-exemptions.txt`, or an inline `# nosemgrep: <rule-id>` |
+| `iac` | git tracks a Terraform, Dockerfile, Helm, Kubernetes, CloudFormation or ARM file outside `trivy-skip-dirs` | a High or Critical misconfiguration that `trivy config` finds | a row in `.github/security/trivy-exemptions.txt`, or an inline `#trivy:ignore:<id>:exp:YYYY-MM-DD` |
+| `sast` | git tracks a Python, JavaScript or TypeScript file outside `semgrep-exclude` | a Semgrep finding that is ERROR severity, category security, and MEDIUM or HIGH confidence | a row in `.github/security/semgrep-exemptions.txt`, or an inline `# nosemgrep: <rule-id>` |
 | `result` | always | any job above that failed or was cancelled | — |
 
 A job with nothing to scan is skipped, which counts as passed. So the one
@@ -41,7 +41,12 @@ v8.30.1, osv-scanner v2.6.0, Trivy v0.69.3) and installed with `go install`,
 which checks the module against the Go checksum database. Semgrep (1.180.0)
 is a Python package, so pip installs it from a file that pins it and every
 dependency to a hash. Trivy v0.69.3 builds only with the Go its `go.mod`
-names (1.25.6), so the action pins that Go for the build. Its rules come from a pinned commit of
+names (1.25.6), so the action pins that Go for the build, and the `iac` job
+sets up that same Go (a test keeps the two equal), so a cold run downloads
+one Go, not two. The `iac` and `sast` jobs set up Python 3.12, so the gates
+and Semgrep's hashed wheels do not depend on the runner image. Semgrep's
+venv is cached, keyed on the Python and the hash of its requirements file.
+Semgrep's rules come from a pinned commit of
 [semgrep/semgrep-rules](https://github.com/semgrep/semgrep-rules), not from
 the registry, which changes every day. Trivy uses the checks built into its
 release (`--skip-check-update`) for the same reason. A new tool or rules
@@ -77,7 +82,13 @@ unless a reviewed exemption with an expiry date covers it.
   security finding across our repos came from one, and none was a real bug.
   Those, and ERROR rules of other categories, print as warnings.
 - Semgrep and Trivy leave out `testdata/`, `vendor/` and `node_modules/`:
-  fixtures and third-party code are not ours to fix.
+  fixtures and third-party code are not ours to fix. That list, plus
+  `semgrep-exclude` or `trivy-skip-dirs`, is the whole list: Semgrep's own
+  default list (which skips `tests/`, `build/`, `dist/` and `*.min.js`) is
+  turned off, since that is our code too.
+- A Dockerfile is what Trivy calls one: `Dockerfile` or `Containerfile`
+  with at most one extension, or a name that ends in `.dockerfile`. A script
+  named `dockerfile-lint.sh` does not start the `iac` job.
 
 ### Not in the workflow
 
@@ -285,8 +296,9 @@ carry the same facts: Trivy's `#trivy:ignore:<id>` (or the older
 `#tfsec:ignore:<id>`) must end in `:exp:YYYY-MM-DD`, and `# nosemgrep` (or
 `# nosem`) must name the rule (`# nosemgrep: <rule-id>`) and say why. Both
 checks fail otherwise. The Trivy check ignores `.trivyignore`,
-`.trivyignore.yaml` and `trivy.yaml`, and warns when one exists: they could
-drop a finding with no expiry.
+`.trivyignore.yaml` and `trivy.yaml`, and the Semgrep check ignores
+`.semgrepignore`. Each warns when such a file exists: it could drop a
+finding with no expiry.
 
 gitleaks: rotate the secret first. A false positive goes in `.gitleaksignore`
 as the fingerprint the log prints (`commit:file:rule:line` for a commit,

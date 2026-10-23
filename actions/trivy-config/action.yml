@@ -1,6 +1,7 @@
 name: Trivy config gate
 description: >-
-  Scan Terraform, Dockerfiles, Kubernetes and Helm files with `trivy config`
+  Scan Terraform, Dockerfiles, Kubernetes, Helm, CloudFormation and ARM
+  files with `trivy config`
   and fail on a High or Critical misconfiguration with no live exemption.
 
 # Why Trivy: one tool covers every kind of infrastructure file our repos

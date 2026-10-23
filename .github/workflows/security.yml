@@ -25,8 +25,8 @@ name: Security
 #                 at HEAD on a scheduled run.
 #   dependencies  osv-scanner over every lockfile but Go's: fail on a fixable
 #                 High or Critical. Warns about a manifest with no lockfile.
-#   iac           trivy config over Terraform, Dockerfiles, Helm and
-#                 Kubernetes files: fail on a High or Critical
+#   iac           trivy config over Terraform, Dockerfiles, Helm,
+#                 Kubernetes, CloudFormation and ARM files: fail on a High or Critical
 #                 misconfiguration, with an expiring exemptions file.
 #   sast          Semgrep CE over Python, JavaScript and TypeScript: fail on
 #                 an ERROR security finding, with an expiring exemptions file.
@@ -84,7 +84,7 @@ on:
         required: false
         default: github.com/luthersystems/license
       iac:
-        description: Run the Trivy misconfiguration scan when the repo has Terraform, Dockerfile, Helm or Kubernetes files.
+        description: Run the Trivy misconfiguration scan when the repo has Terraform, Dockerfile, Helm, Kubernetes, CloudFormation or ARM files.
         type: boolean
         required: false
         default: true
@@ -171,6 +171,8 @@ jobs:
         uses: luthersystems/.github/actions/security-detect@v1
         with:
           go-directories: ${{ inputs.go-directories }}
+          trivy-skip-dirs: ${{ inputs.trivy-skip-dirs }}
+          semgrep-exclude: ${{ inputs.semgrep-exclude }}
 
   govulncheck:
     needs: detect
@@ -270,11 +272,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Go only to build the pinned Trivy.
+      # Go only to build the pinned Trivy, at the Go its go.mod names: the
+      # trivy-config action pins that Go (TOOL_GOTOOLCHAIN) because a newer
+      # one fails the build, so any other version here is a second download.
+      # tests/security/autofix-test.sh checks the two stay equal.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version: 1.25.6
           cache: false
+      # The gate is a Python script; pinned so it does not depend on the
+      # runner image (a self-hosted runner may have an old python3 or none).
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
       - uses: luthersystems/.github/actions/trivy-config@v1
         with:
           exemptions: ${{ inputs.trivy-exemptions }}
@@ -291,6 +301,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Semgrep needs Python 3.10 or later and installs only the hashed wheels
+      # in its requirements.txt, so the Python is pinned rather than taken
+      # from the runner image; a stable Python also keeps the venv cache warm.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
       - uses: luthersystems/.github/actions/semgrep@v1
         with:
           exemptions: ${{ inputs.semgrep-exemptions }}
