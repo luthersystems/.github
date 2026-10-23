@@ -21,9 +21,9 @@ description: >-
 #
 # Needs, from the job: the repo checked out with persist-credentials: false,
 # Go on PATH, permissions id-token: write (Bedrock and the Claude App token)
-# and issues: write, the Claude GitHub App installed on the repo, and the repo
-# in the trust list of the Bedrock role (common-infrastructure,
-# storage/github_actions_claude_bedrock.tf), which admits only runs on main.
+# and issues: write, and the Claude GitHub App installed on the repo. The
+# Bedrock role (common-infrastructure, storage/github_actions_claude_bedrock.tf)
+# admits a run on main of any luthersystems repo, so no per-repo entry.
 
 inputs:
   failed:
