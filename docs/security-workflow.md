@@ -40,7 +40,8 @@ Each tool is pinned (govulncheck v1.8.0, golangci-lint v2.15.0, gitleaks
 v8.30.1, osv-scanner v2.6.0, Trivy v0.69.3) and installed with `go install`,
 which checks the module against the Go checksum database. Semgrep (1.180.0)
 is a Python package, so pip installs it from a file that pins it and every
-dependency to a hash. Its rules come from a pinned commit of
+dependency to a hash. Trivy v0.69.3 builds only with the Go its `go.mod`
+names (1.25.6), so the action pins that Go for the build. Its rules come from a pinned commit of
 [semgrep/semgrep-rules](https://github.com/semgrep/semgrep-rules), not from
 the registry, which changes every day. Trivy uses the checks built into its
 release (`--skip-check-update`) for the same reason. A new tool or rules
@@ -266,21 +267,26 @@ reason = "dev-only dependency; upstream fix tracked in luthersystems/onboard#123
 
 The gate refuses a row with no `ignoreUntil` or no `reason`.
 
-Trivy and Semgrep, one row per rule and file. The path is a glob from the
-repo root (`*` matches every file). The error prints the row to add:
+Trivy and Semgrep, one row per rule and file. The path is the file, from
+the repo root, or a glob: `*` and `?` stay inside one directory, `**`
+crosses directories, and `[ ]` are literal, so a path the error prints
+always matches itself. The error prints the row to add:
 
 ```text
 # .github/security/trivy-exemptions.txt (or semgrep-exemptions.txt)
 # id | path | expires (YYYY-MM-DD) | issue | reason
 AWS-0086 | aws/s3/main.tf | 2027-01-31 | luthersystems/tf-modules#90 | the preset's public bucket is for a static site
-python.lang.security.audit.subprocess-shell-true | scripts/*.py | 2027-01-31 | luthersystems/mars#200 | build scripts, arguments are ours
+python.lang.security.audit.subprocess-shell-true | scripts/**/*.py | 2027-01-31 | luthersystems/mars#200 | build scripts, arguments are ours
 ```
 
 A Trivy id may be written `AWS-0086` or `AVD-AWS-0086`. A row that covers no
 finding prints a warning, so it can be deleted. An inline exemption must
-carry the same facts: Trivy's `#trivy:ignore:<id>` must end in
-`:exp:YYYY-MM-DD`, and `# nosemgrep` must name the rule
-(`# nosemgrep: <rule-id>`) and say why. Both checks fail otherwise.
+carry the same facts: Trivy's `#trivy:ignore:<id>` (or the older
+`#tfsec:ignore:<id>`) must end in `:exp:YYYY-MM-DD`, and `# nosemgrep` (or
+`# nosem`) must name the rule (`# nosemgrep: <rule-id>`) and say why. Both
+checks fail otherwise. The Trivy check ignores `.trivyignore`,
+`.trivyignore.yaml` and `trivy.yaml`, and warns when one exists: they could
+drop a finding with no expiry.
 
 gitleaks: rotate the secret first. A false positive goes in `.gitleaksignore`
 as the fingerprint the log prints (`commit:file:rule:line` for a commit,
