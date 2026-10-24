@@ -168,6 +168,12 @@ With the default `runs-on: auto`, each job runs on the JSON value of the
 org variable `LUTHER_CI_RUNNER`, and on `ubuntu-latest` when the variable is
 empty or the repo is public.
 
+The `autofix` job is the exception: it always runs on `ubuntu-latest`,
+whatever `runs-on` says. It holds the Bedrock role, the Claude App token and
+the deploy key, and a GCP pool VM runs jobs from every repo in the group,
+each one root on a VM that outlives it, so any writer of any listed repo
+could take them.
+
 | Repo | Runner | Why |
 |---|---|---|
 | Private, listed | `LUTHER_CI_RUNNER`: `["self-hosted","luther-ci"]` (the GCP pool) | GitHub bills hosted minutes on private repos, and this workflow runs on every push and PR |
