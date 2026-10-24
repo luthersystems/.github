@@ -434,7 +434,7 @@ jobs:
       # The Claude Code CLI needs Node. GitHub's hosted image has it; the
       # self-hosted GCP image that runs: auto picks for private repos does
       # not, so set it up here rather than depend on the image.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - uses: luthersystems/.github/actions/security-autofix@v1
