@@ -172,7 +172,7 @@ The caller's job id must be `quality`, so the check is named
 | `api-break-surface-script` | none | elps and substrate (the Lisp surface) |
 | `apibreak-version` | `v1.85.0` | never; change the default here |
 | `goprivate` | `github.com/luthersystems/license` | the repo imports another private module |
-| `runs-on` | `auto`: the org variable `LUTHER_CI_RUNNER` on a private repo, `ubuntu-latest` on a public one (see "Runners" in [security-workflow.md](security-workflow.md#runners)) | a label or a JSON array of labels, for one fixed runner |
+| `runs-on` | `auto`: the org variable `LUTHER_CI_RUNNER` on a private repo in the runner group, else `ubuntu-latest` (see "Runners" in [security-workflow.md](security-workflow.md#runners)) | a label or a JSON array of labels, for one fixed runner |
 
 ## Rollout
 

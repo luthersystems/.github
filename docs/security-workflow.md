@@ -170,16 +170,18 @@ empty or the repo is public.
 
 | Repo | Runner | Why |
 |---|---|---|
-| Private | `LUTHER_CI_RUNNER`, today `["self-hosted","luther-ci"]` (the GCP pool) | GitHub bills hosted minutes on private repos, and this workflow runs on every push and PR |
+| Private, listed | `LUTHER_CI_RUNNER`: `["self-hosted","luther-ci"]` (the GCP pool) | GitHub bills hosted minutes on private repos, and this workflow runs on every push and PR |
+| Private, not listed | `ubuntu-latest` | The repo is not in the runner group, so it reads the variable as empty |
 | Public | `ubuntu-latest` | Hosted runners are free on public repos, and a fork PR must never run on a self-hosted runner: its code would be root on our VM |
 
-The variable is visible to private repos only, so a public repo reads it
-as empty. The workflow also checks `github.event.repository.visibility`, in
-case the variable's visibility is ever widened. Terraform manages the
-variable and the runner group (luthersystems/common-infrastructure,
-`github-org`). To move every private repo back to hosted runners, for
-example while the GCP pool is down, empty the variable: no workflow change
-is needed.
+Terraform manages the variable and the runner group together, for the
+private repos listed in luthersystems/common-infrastructure
+`github-org/self_hosted_runners.json`: the variable is visible to exactly the
+repos the group admits. To move a repo, add it to that list. The workflow
+also checks `github.event.repository.visibility`, in case the variable's
+visibility is ever widened to a public repo. To move every listed repo back
+to hosted runners, for example while the GCP pool is down, set the variable
+to `"ubuntu-latest"` there: no workflow change is needed.
 
 ### The drift issue
 

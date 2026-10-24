@@ -137,8 +137,8 @@ on:
         description: >-
           Runner for every job: auto, a label (ubuntu-latest) or a JSON array
           of labels (["self-hosted","luther-ci"]). auto takes the org variable
-          LUTHER_CI_RUNNER, which only private repos can read, and falls back
-          to ubuntu-latest. See docs/security-workflow.md, "Runners".
+          LUTHER_CI_RUNNER, which only the private repos in the runner group
+          can read, and falls back to ubuntu-latest. See docs/security-workflow.md, "Runners".
         type: string
         required: false
         default: auto
@@ -161,15 +161,16 @@ on:
 # org's self-hosted GCP runners (common-infrastructure gcp-ci-runner) cost
 # no GitHub minutes, while public repos get hosted runners free and must
 # never reach a self-hosted runner (a fork PR would run a stranger's code as
-# root on our VM). LUTHER_CI_RUNNER is an org variable visible to private
-# repos only, so a public repo reads it as empty and stays on ubuntu-latest.
-# The `visibility != 'public'` test is a second guard for a public repo if
-# the variable's visibility is ever widened. It compares with a string, not
-# `private != false`, because an expression coerces null to 0 = false: an
+# root on our VM). LUTHER_CI_RUNNER is an org variable visible only to the
+# private repos the runner group admits (common-infrastructure github-org,
+# self_hosted_runners.json); every other repo reads it as empty and stays on
+# ubuntu-latest. The `visibility != 'public'` test is a second guard for a
+# public repo if the variable's visibility is ever widened. It compares with
+# a string, not `private != false`, because an expression coerces null to 0 = false: an
 # event whose payload has no repository would then read as public and fall
-# back to hosted runners. Emptying the variable moves every private repo back to hosted
-# runners at once, with no workflow change. A caller that passes a label
-# or a JSON array gets exactly that.
+# back to hosted runners. Setting the variable to "ubuntu-latest" moves every
+# listed repo back to hosted runners at once, with no workflow change. A
+# caller that passes a label or a JSON array gets exactly that.
 
 jobs:
   detect:
