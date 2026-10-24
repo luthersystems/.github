@@ -171,8 +171,9 @@ on:
 # The `visibility != 'public'` test is a second guard for a public repo if
 # the variable's visibility is ever widened, on the events whose payload
 # names the repository (push, pull_request, dispatch); a scheduled run's
-# payload does not, so there the variable alone decides. It compares with a
-# string, not `private != false`, because an expression coerces null to
+# payload does not, so there the variable alone decides. That gap is safe:
+# a scheduled run checks out the default branch, never a fork's code. It
+# compares with a string, not `private != false`, because an expression coerces null to
 # 0 = false, so a scheduled run of a private repo would read as public.
 #
 # Setting the variable to "ubuntu-latest" moves every listed repo back to
