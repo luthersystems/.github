@@ -120,7 +120,8 @@ on:
           Runner for every job: auto, a label (ubuntu-latest) or a JSON array
           of labels (["self-hosted","luther-ci"]). auto takes the org variable
           LUTHER_CI_RUNNER, which only the private repos in the runner group
-          can read, and falls back to ubuntu-latest. See docs/quality-workflow.md.
+          can read, and falls back to ubuntu-latest. See "Runners" in
+          docs/security-workflow.md.
         type: string
         required: false
         default: auto

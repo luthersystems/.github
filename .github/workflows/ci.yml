@@ -45,6 +45,18 @@ jobs:
               exit 1
             fi
           done
+      # security.yml and quality.yml repeat one runs-on expression on every
+      # job (GitHub has no shared runs-on). A job whose copy drifts runs
+      # somewhere its siblings do not, which shows only as a queued job.
+      - name: Check every shared job picks its runner the same way
+        run: |
+          set -euo pipefail
+          n="$(grep -h '^    runs-on:' .github/workflows/security.yml .github/workflows/quality.yml | sort -u | wc -l)"
+          if [ "$n" -ne 1 ]; then
+            grep -n '^    runs-on:' .github/workflows/security.yml .github/workflows/quality.yml
+            echo "::error::the jobs of security.yml and quality.yml use $n different runs-on expressions; keep one"
+            exit 1
+          fi
       - name: Run actionlint
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7

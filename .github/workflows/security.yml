@@ -164,13 +164,21 @@ on:
 # root on our VM). LUTHER_CI_RUNNER is an org variable visible only to the
 # private repos the runner group admits (common-infrastructure github-org,
 # self_hosted_runners.json); every other repo reads it as empty and stays on
-# ubuntu-latest. The `visibility != 'public'` test is a second guard for a
-# public repo if the variable's visibility is ever widened. It compares with
-# a string, not `private != false`, because an expression coerces null to 0 = false: an
-# event whose payload has no repository would then read as public and fall
-# back to hosted runners. Setting the variable to "ubuntu-latest" moves every
-# listed repo back to hosted runners at once, with no workflow change. A
-# caller that passes a label or a JSON array gets exactly that.
+# ubuntu-latest. The pool is arm64 Ubuntu 24.04 (hosted ubuntu-latest is
+# amd64): every tool here is built from source or set up per job, so the
+# checks do not depend on the architecture.
+#
+# The `visibility != 'public'` test is a second guard for a public repo if
+# the variable's visibility is ever widened, on the events whose payload
+# names the repository (push, pull_request, dispatch); a scheduled run's
+# payload does not, so there the variable alone decides. It compares with a
+# string, not `private != false`, because an expression coerces null to
+# 0 = false, so a scheduled run of a private repo would read as public.
+#
+# Setting the variable to "ubuntu-latest" moves every listed repo back to
+# hosted runners at once, with no workflow change. A caller that passes a
+# label or a JSON array gets exactly that. The expression is repeated on
+# every job (GitHub has no shared runs-on); ci.yml checks the copies match.
 
 jobs:
   detect:
@@ -422,6 +430,12 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
           goprivate: ${{ inputs.goprivate }}
+      # The Claude Code CLI needs Node. GitHub's hosted image has it; the
+      # self-hosted GCP image that runs: auto picks for private repos does
+      # not, so set it up here rather than depend on the image.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "22"
       - uses: luthersystems/.github/actions/security-autofix@v1
         with:
           failed: ${{ needs.govulncheck.result == 'failure' && 'govulncheck' || '' }} ${{ needs.dependencies.result == 'failure' && 'dependencies' || '' }}
