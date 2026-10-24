@@ -134,10 +134,14 @@ on:
         required: false
         default: us.anthropic.claude-opus-5-5
       runs-on:
-        description: Runner label for every job.
+        description: >-
+          Runner for every job: auto, a label (ubuntu-latest) or a JSON array
+          of labels (["self-hosted","luther-ci"]). auto takes the org variable
+          LUTHER_CI_RUNNER, which only private repos can read, and falls back
+          to ubuntu-latest. See docs/security-workflow.md, "Runners".
         type: string
         required: false
-        default: ubuntu-latest
+        default: auto
     secrets:
       SSH_PRIVATE_KEY:
         description: >-
@@ -152,9 +156,24 @@ on:
 # cannot ask for id-token: write; it inherits whatever the caller's security
 # job grants, and every other job narrows that to read.
 
+# Runner choice (runs-on: auto, the default). Why an org variable and not
+# a fixed label: private repos pay for every GitHub-hosted minute, and the
+# org's self-hosted GCP runners (common-infrastructure gcp-ci-runner) cost
+# no GitHub minutes, while public repos get hosted runners free and must
+# never reach a self-hosted runner (a fork PR would run a stranger's code as
+# root on our VM). LUTHER_CI_RUNNER is an org variable visible to private
+# repos only, so a public repo reads it as empty and stays on ubuntu-latest.
+# The `visibility != 'public'` test is a second guard for a public repo if
+# the variable's visibility is ever widened. It compares with a string, not
+# `private != false`, because an expression coerces null to 0 = false: an
+# event whose payload has no repository would then read as public and fall
+# back to hosted runners. Emptying the variable moves every private repo back to hosted
+# runners at once, with no workflow change. A caller that passes a label
+# or a JSON array gets exactly that.
+
 jobs:
   detect:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -177,7 +196,7 @@ jobs:
   govulncheck:
     needs: detect
     if: needs.detect.outputs.go-directories != ''
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -203,7 +222,7 @@ jobs:
   gosec:
     needs: detect
     if: needs.detect.outputs.go-directories != '' && inputs.gosec
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -224,7 +243,7 @@ jobs:
           directories: ${{ needs.detect.outputs.go-directories }}
 
   secrets:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -244,7 +263,7 @@ jobs:
       - uses: luthersystems/.github/actions/gitleaks@v1
 
   dependencies:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -264,7 +283,7 @@ jobs:
   iac:
     needs: detect
     if: needs.detect.outputs.iac == 'true' && inputs.iac
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -293,7 +312,7 @@ jobs:
   sast:
     needs: detect
     if: needs.detect.outputs.code == 'true' && inputs.sast
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -317,7 +336,7 @@ jobs:
   result:
     needs: [detect, govulncheck, gosec, secrets, dependencies, iac, sast]
     if: always()
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 5
     permissions:
       issues: write # the security-drift issue on scheduled runs
@@ -374,7 +393,7 @@ jobs:
       always() && inputs.autofix && inputs.drift-issue &&
       needs.result.outputs.tracks-default == 'true' &&
       (needs.govulncheck.result == 'failure' || needs.dependencies.result == 'failure')
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ fromJSON(inputs.runs-on != 'auto' && (startsWith(inputs.runs-on, '[') && inputs.runs-on || toJSON(inputs.runs-on)) || (github.event.repository.visibility != 'public' && vars.LUTHER_CI_RUNNER || '"ubuntu-latest"')) }}
     timeout-minutes: 60
     # No permissions key: see the note above `jobs:`. The caller grants
     # id-token: write (Bedrock and the Claude App token) and issues: write
