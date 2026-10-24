@@ -158,9 +158,36 @@ The caller's job id must be `security`, so the check is named
 | `semgrep-exemptions` | `.github/security/semgrep-exemptions.txt` | the repo keeps its exemptions elsewhere |
 | `semgrep-exclude` | none (`testdata`, `vendor` and `node_modules` always) | generated or third-party code |
 | `drift-issue` | `true` | the repo tracks scheduled failures another way |
-| `runs-on` | `ubuntu-latest` | the repo needs a self-hosted runner |
+| `runs-on` | `auto` (see [Runners](#runners)) | the repo needs one fixed runner: a label, or a JSON array such as `["self-hosted","luther-ci-ondemand"]` |
 | `autofix` | `false` | the repo wants Claude to propose fixes for scheduled scan failures (see [Auto-fix](#auto-fix)) |
 | `autofix-model` | `us.anthropic.claude-opus-5-5` | a cheaper or newer Bedrock model is wanted |
+
+### Runners
+
+With the default `runs-on: auto`, each job runs on the JSON value of the
+org variable `LUTHER_CI_RUNNER`, and on `ubuntu-latest` when the variable is
+empty or the repo is public.
+
+The `autofix` job is the exception: it always runs on `ubuntu-latest`,
+whatever `runs-on` says. It holds the Bedrock role, the Claude App token and
+the deploy key, and a GCP pool VM runs jobs from every repo in the group,
+each one root on a VM that outlives it, so any writer of any listed repo
+could take them.
+
+| Repo | Runner | Why |
+|---|---|---|
+| Private, listed | `LUTHER_CI_RUNNER`: `["self-hosted","luther-ci"]` (the GCP pool) | GitHub bills hosted minutes on private repos, and this workflow runs on every push and PR |
+| Private, not listed | `ubuntu-latest` | The repo is not in the runner group, so it reads the variable as empty |
+| Public | `ubuntu-latest` | Hosted runners are free on public repos, and a fork PR must never run on a self-hosted runner: its code would be root on our VM |
+
+Terraform manages the variable and the runner group together, for the
+private repos listed in luthersystems/common-infrastructure
+`github-org/self_hosted_runners.json`: the variable is visible to exactly the
+repos the group admits. To move a repo, add it to that list. The workflow
+also checks `github.event.repository.visibility`, in case the variable's
+visibility is ever widened to a public repo. To move every listed repo back
+to hosted runners, for example while the GCP pool is down, set the variable
+to `"ubuntu-latest"` there: no workflow change is needed.
 
 ### The drift issue
 
