@@ -27,6 +27,16 @@ name: Release (tag)
 #   same-major rule lets a repo keep tags of an experimental later major off
 #   main (substrate's v3) without refusing releases of main's line (v2).
 #
+# A Go module in a subdirectory is fetched by tags named
+# <dir>/vMAJOR.MINOR.PATCH, so input tag_prefix (e.g. "wasm/") puts that
+# prefix on the tag and the release. <dir> is the module's directory without
+# a /vN major suffix: module .../wasm/v2 in wasm/v2/ takes tag_prefix "wasm/"
+# and tags wasm/v2.0.0. Every version rule above reads only the caller's tags
+# with that prefix. A prefixed release is never marked the repo's latest
+# release, which stays the main module's. The first release under a prefix
+# has no start tag, so its generated notes reach back to the repo's latest
+# release; set notes_command for it if that matters.
+#
 # Token (input release_token):
 # - github (default): the caller's GITHUB_TOKEN creates the tag and the
 #   release. GitHub starts no workflow for an event made with that token, so
@@ -94,6 +104,15 @@ on:
         type: string
         required: false
         default: ""
+      tag_prefix:
+        description: >-
+          Prefix of the tag and the release, for a Go module in a
+          subdirectory: "wasm/" releases wasm/vMAJOR.MINOR.PATCH. Empty =
+          vMAJOR.MINOR.PATCH. Versions are compared only among tags with
+          this prefix.
+        type: string
+        required: false
+        default: ""
       runs_on:
         description: "runs-on for the job, as JSON (a string or a list of labels)"
         type: string
@@ -103,6 +122,9 @@ on:
       version:
         description: "The version released (or, on a dry run, the one that would be)"
         value: ${{ jobs.release.outputs.version }}
+      tag:
+        description: "The tag released: tag_prefix and version"
+        value: ${{ jobs.release.outputs.tag }}
 
 jobs:
   release:
@@ -118,6 +140,9 @@ jobs:
       cancel-in-progress: false
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    env:
+      TAG_PREFIX: ${{ inputs.tag_prefix }}
     steps:
       - name: Check the release mode
         env:
@@ -127,6 +152,14 @@ jobs:
             github|claude-app) ;;
             *) echo "error: release_token must be github or claude-app, not '$RELEASE_TOKEN'" >&2; exit 1 ;;
           esac
+          # The prefix reaches API paths, git and the release command, so
+          # allow only directories of plain characters ending in /, and only
+          # ones git accepts in a tag name (no component ending in . or
+          # .lock), so a bad prefix fails here, not after the CI wait.
+          if ! [[ -z "$TAG_PREFIX" || ( "$TAG_PREFIX" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*/)+$ && "$TAG_PREFIX" != *..* ) ]] \
+            || ! git check-ref-format "refs/tags/${TAG_PREFIX}v0.0.0"; then
+            echo "error: tag_prefix '$TAG_PREFIX' must be empty or directories ending in /, such as wasm/" >&2; exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # all tags, for latest-version detection
@@ -218,14 +251,17 @@ jobs:
           # refusing every release of main's line (v2.x).
           # Python, not sort -V or bash arithmetic: sort -V treats v1.2.08 and
           # v1.2.8 as equal, and bash overflows past 64 bits.
-          picked=$(python3 -I - "$REQUESTED" "$MAJORS" <<'PY'
+          picked=$(python3 -I - "$REQUESTED" "$MAJORS" "$TAG_PREFIX" <<'PY'
           import re, subprocess, sys
           STABLE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
           def key(t):
               return tuple((len(p.lstrip("0")), p.lstrip("0")) for p in t[1:].split("."))
+          PREFIX = sys.argv[3]
           def tags(*args):
-              out = subprocess.run(["git", "tag", "--list", "v*", *args], check=True,
+              # Versions of the tags with the caller's prefix, prefix removed.
+              out = subprocess.run(["git", "tag", "--list", PREFIX + "v*", *args], check=True,
                                    capture_output=True, text=True).stdout.split()
+              out = [t[len(PREFIX):] for t in out]
               return [t for t in out if STABLE.fullmatch(t)]
           all_tags, main_tags = tags(), tags("--merged", "HEAD")
           main_major = max((key(t)[0] for t in main_tags), default=None)
@@ -251,7 +287,7 @@ jobs:
           latest = max(same, key=key) if same else ""
           if latest and key(version) <= key(latest):
               sys.exit(f"version {version} is not strictly newer than {latest}, the latest tag of its major")
-          print(version, latest)
+          print(version, PREFIX + latest if latest else "")
           PY
           ) || { echo "error: version check failed" >&2; exit 1; }
           read -r version latest <<<"$picked"
@@ -264,32 +300,37 @@ jobs:
           # A second dispatch queued behind the first (concurrency above)
           # runs on the same live main and would auto-bump again, cutting a
           # second release of one commit. Refuse a commit already released.
-          already=$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | tr '\n' ' ' || true)
+          already=""
+          for t in $(git tag --points-at "$GITHUB_SHA" --list "${TAG_PREFIX}v*"); do
+            [[ "${t#"$TAG_PREFIX"}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && already+="$t "
+          done
           if [ -n "$already" ]; then
             echo "error: commit $GITHUB_SHA is already released as $already" >&2
             exit 1
           fi
-          if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
-            echo "error: tag $version already exists" >&2
+          tag="$TAG_PREFIX$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "error: tag $tag already exists" >&2
             exit 1
           fi
           # The checkout's tags date from before the CI wait, which can last
           # 30 minutes, so ask GitHub too. gh release create would otherwise
           # publish onto a tag pushed in that window, whatever it points at.
-          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$version" --jq '.[].ref')
-          if grep -qxF "refs/tags/$version" <<<"$refs"; then
-            echo "error: tag $version already exists on GitHub" >&2
+          refs=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" --jq '.[].ref')
+          if grep -qxF "refs/tags/$tag" <<<"$refs"; then
+            echo "error: tag $tag already exists on GitHub" >&2
             exit 1
           fi
-          echo "computed version: $version (latest existing: ${latest:-none})"
+          echo "computed version: $version, tag $tag (latest existing: ${latest:-none})"
           {
             echo "version=$version"
+            echo "tag=$tag"
             echo "latest=$latest"
           } >> "$GITHUB_OUTPUT"
       - name: Build the release command
         id: cmd
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
           LAST_TAG: ${{ steps.ver.outputs.latest }}
           NOTES_COMMAND: ${{ inputs.notes_command }}
         run: |
@@ -301,18 +342,24 @@ jobs:
           if [ -n "$LAST_TAG" ]; then
             notes_args="--generate-notes --notes-start-tag $LAST_TAG"
           fi
+          # A subdirectory module's release must not take the repo's Latest
+          # release from the main module's line.
+          if [ -n "$TAG_PREFIX" ]; then
+            notes_args="--latest=false $notes_args"
+          fi
           if [ -n "$NOTES_COMMAND" ]; then
             notes_path="$RUNNER_TEMP/release-notes.md"
             # The caller's own command in the caller's own checkout: it is
             # repo configuration, not dispatch input.
             LAST_TAG="$LAST_TAG" bash -c "$NOTES_COMMAND" > "$notes_path"
-            notes_args="--notes-file $notes_path"
+            notes_args="${notes_args%%--generate-notes*}--notes-file $notes_path"
           fi
-          # Every value here is a validated version, a 40-hex SHA, the repo
-          # name or a runner path, so the command needs no quoting; the
-          # claude-app hook compares Claude's command to this exact string.
-          cmd="gh release create $VERSION --repo $GITHUB_REPOSITORY --title $VERSION --target $GITHUB_SHA $notes_args"
-          [[ "$cmd" =~ ^[A-Za-z0-9_./:\ -]+$ ]] || { echo "error: unsafe release command: $cmd" >&2; exit 1; }
+          # Every value here is a validated version or tag, a 40-hex SHA,
+          # the repo name or a runner path, so the command needs no quoting;
+          # the claude-app hook compares Claude's command to this exact
+          # string.
+          cmd="gh release create $TAG --repo $GITHUB_REPOSITORY --title $TAG --target $GITHUB_SHA $notes_args"
+          [[ "$cmd" =~ ^[A-Za-z0-9_./:=\ -]+$ ]] || { echo "error: unsafe release command: $cmd" >&2; exit 1; }
           printf '%s' "$cmd" > "$RUNNER_TEMP/release-command.txt"
           chmod 400 "$RUNNER_TEMP/release-command.txt"
           echo "command=$cmd" >> "$GITHUB_OUTPUT"
@@ -419,25 +466,25 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -euo pipefail
           fail() { echo "error: $*" >&2; exit 1; }
-          release=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease) \
-            || fail "release $VERSION was not found"
-          jq -e --arg v "$VERSION" '.tagName == $v and .isDraft == false and .isPrerelease == false' >/dev/null <<<"$release" \
-            || fail "release $VERSION is a draft or a pre-release: $release"
-          object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object) \
-            || fail "tag ref $VERSION was not found"
+          release=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease) \
+            || fail "release $TAG was not found"
+          jq -e --arg v "$TAG" '.tagName == $v and .isDraft == false and .isPrerelease == false' >/dev/null <<<"$release" \
+            || fail "release $TAG is a draft or a pre-release: $release"
+          object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object) \
+            || fail "tag ref $TAG was not found"
           # Peel annotated tags to the commit they name.
           for _ in $(seq 10); do
             type=$(jq -r .type <<<"$object"); sha=$(jq -r .sha <<<"$object")
             if [ "$type" = commit ]; then
-              [ "$sha" = "$GITHUB_SHA" ] || fail "tag $VERSION points at $sha, not $GITHUB_SHA"
-              echo "released $VERSION at $GITHUB_SHA"
+              [ "$sha" = "$GITHUB_SHA" ] || fail "tag $TAG points at $sha, not $GITHUB_SHA"
+              echo "released $TAG at $GITHUB_SHA"
               exit 0
             fi
-            [ "$type" = tag ] || fail "tag $VERSION does not resolve to a commit"
+            [ "$type" = tag ] || fail "tag $TAG does not resolve to a commit"
             object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .object)
           done
-          fail "tag $VERSION nests too deeply"
+          fail "tag $TAG nests too deeply"
