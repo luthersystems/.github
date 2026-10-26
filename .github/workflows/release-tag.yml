@@ -29,8 +29,13 @@ name: Release (tag)
 #
 # A Go module in a subdirectory is fetched by tags named
 # <dir>/vMAJOR.MINOR.PATCH, so input tag_prefix (e.g. "wasm/") puts that
-# prefix on the tag and the release. Every version rule above reads only the
-# caller's tags with that prefix.
+# prefix on the tag and the release. <dir> is the module's directory without
+# a /vN major suffix: module .../wasm/v2 in wasm/v2/ takes tag_prefix "wasm/"
+# and tags wasm/v2.0.0. Every version rule above reads only the caller's tags
+# with that prefix. A prefixed release is never marked the repo's latest
+# release, which stays the main module's. The first release under a prefix
+# has no start tag, so its generated notes reach back to the repo's latest
+# release; set notes_command for it if that matters.
 #
 # Token (input release_token):
 # - github (default): the caller's GITHUB_TOKEN creates the tag and the
@@ -148,8 +153,11 @@ jobs:
             *) echo "error: release_token must be github or claude-app, not '$RELEASE_TOKEN'" >&2; exit 1 ;;
           esac
           # The prefix reaches API paths, git and the release command, so
-          # allow only directories of plain characters ending in /.
-          [[ -z "$TAG_PREFIX" || ( "$TAG_PREFIX" =~ ^([a-z0-9][a-z0-9._-]*/)+$ && "$TAG_PREFIX" != *..* ) ]] || {
+          # allow only directories of plain characters ending in /, and only
+          # ones git accepts in a tag name (no component ending in . or
+          # .lock), so a bad prefix fails here, not after the CI wait.
+          [[ -z "$TAG_PREFIX" || ( "$TAG_PREFIX" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*/)+$ && "$TAG_PREFIX" != *..* ) ]] \
+            && git check-ref-format "refs/tags/${TAG_PREFIX}v0.0.0" || {
             echo "error: tag_prefix '$TAG_PREFIX' must be empty or directories ending in /, such as wasm/" >&2; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -252,7 +260,7 @@ jobs:
               # Versions of the tags with the caller's prefix, prefix removed.
               out = subprocess.run(["git", "tag", "--list", PREFIX + "v*", *args], check=True,
                                    capture_output=True, text=True).stdout.split()
-              out = [t[len(PREFIX):] for t in out if t.startswith(PREFIX)]
+              out = [t[len(PREFIX):] for t in out]
               return [t for t in out if STABLE.fullmatch(t)]
           all_tags, main_tags = tags(), tags("--merged", "HEAD")
           main_major = max((key(t)[0] for t in main_tags), default=None)
@@ -333,19 +341,24 @@ jobs:
           if [ -n "$LAST_TAG" ]; then
             notes_args="--generate-notes --notes-start-tag $LAST_TAG"
           fi
+          # A subdirectory module's release must not take the repo's Latest
+          # release from the main module's line.
+          if [ -n "$TAG_PREFIX" ]; then
+            notes_args="--latest=false $notes_args"
+          fi
           if [ -n "$NOTES_COMMAND" ]; then
             notes_path="$RUNNER_TEMP/release-notes.md"
             # The caller's own command in the caller's own checkout: it is
             # repo configuration, not dispatch input.
             LAST_TAG="$LAST_TAG" bash -c "$NOTES_COMMAND" > "$notes_path"
-            notes_args="--notes-file $notes_path"
+            notes_args="${notes_args%%--generate-notes*}--notes-file $notes_path"
           fi
           # Every value here is a validated version or tag, a 40-hex SHA,
           # the repo name or a runner path, so the command needs no quoting;
           # the claude-app hook compares Claude's command to this exact
           # string.
           cmd="gh release create $TAG --repo $GITHUB_REPOSITORY --title $TAG --target $GITHUB_SHA $notes_args"
-          [[ "$cmd" =~ ^[A-Za-z0-9_./:\ -]+$ ]] || { echo "error: unsafe release command: $cmd" >&2; exit 1; }
+          [[ "$cmd" =~ ^[A-Za-z0-9_./:=\ -]+$ ]] || { echo "error: unsafe release command: $cmd" >&2; exit 1; }
           printf '%s' "$cmd" > "$RUNNER_TEMP/release-command.txt"
           chmod 400 "$RUNNER_TEMP/release-command.txt"
           echo "command=$cmd" >> "$GITHUB_OUTPUT"
@@ -452,25 +465,25 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.ver.outputs.tag }}
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -euo pipefail
           fail() { echo "error: $*" >&2; exit 1; }
-          release=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease) \
-            || fail "release $VERSION was not found"
-          jq -e --arg v "$VERSION" '.tagName == $v and .isDraft == false and .isPrerelease == false' >/dev/null <<<"$release" \
-            || fail "release $VERSION is a draft or a pre-release: $release"
-          object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" --jq .object) \
-            || fail "tag ref $VERSION was not found"
+          release=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease) \
+            || fail "release $TAG was not found"
+          jq -e --arg v "$TAG" '.tagName == $v and .isDraft == false and .isPrerelease == false' >/dev/null <<<"$release" \
+            || fail "release $TAG is a draft or a pre-release: $release"
+          object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object) \
+            || fail "tag ref $TAG was not found"
           # Peel annotated tags to the commit they name.
           for _ in $(seq 10); do
             type=$(jq -r .type <<<"$object"); sha=$(jq -r .sha <<<"$object")
             if [ "$type" = commit ]; then
-              [ "$sha" = "$GITHUB_SHA" ] || fail "tag $VERSION points at $sha, not $GITHUB_SHA"
-              echo "released $VERSION at $GITHUB_SHA"
+              [ "$sha" = "$GITHUB_SHA" ] || fail "tag $TAG points at $sha, not $GITHUB_SHA"
+              echo "released $TAG at $GITHUB_SHA"
               exit 0
             fi
-            [ "$type" = tag ] || fail "tag $VERSION does not resolve to a commit"
+            [ "$type" = tag ] || fail "tag $TAG does not resolve to a commit"
             object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .object)
           done
-          fail "tag $VERSION nests too deeply"
+          fail "tag $TAG nests too deeply"
