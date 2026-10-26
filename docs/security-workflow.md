@@ -138,7 +138,9 @@ jobs:
     uses: luthersystems/.github/.github/workflows/security.yml@v1
     # Only a repo that imports a private module (luthersystems/license):
     # secrets:
-    #   SSH_PRIVATE_KEY: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
+    #   # A read-only deploy key: these jobs run on the shared luther-ci
+    #   # runners, where a job from another repo could read a key.
+    #   SSH_PRIVATE_KEY: ${{ secrets.LICENSE_DEPLOY_KEY }}
 ```
 
 The caller's job id must be `security`, so the check is named
