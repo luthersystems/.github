@@ -156,9 +156,10 @@ jobs:
           # allow only directories of plain characters ending in /, and only
           # ones git accepts in a tag name (no component ending in . or
           # .lock), so a bad prefix fails here, not after the CI wait.
-          [[ -z "$TAG_PREFIX" || ( "$TAG_PREFIX" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*/)+$ && "$TAG_PREFIX" != *..* ) ]] \
-            && git check-ref-format "refs/tags/${TAG_PREFIX}v0.0.0" || {
-            echo "error: tag_prefix '$TAG_PREFIX' must be empty or directories ending in /, such as wasm/" >&2; exit 1; }
+          if ! [[ -z "$TAG_PREFIX" || ( "$TAG_PREFIX" =~ ^([A-Za-z0-9][A-Za-z0-9._-]*/)+$ && "$TAG_PREFIX" != *..* ) ]] \
+            || ! git check-ref-format "refs/tags/${TAG_PREFIX}v0.0.0"; then
+            echo "error: tag_prefix '$TAG_PREFIX' must be empty or directories ending in /, such as wasm/" >&2; exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # all tags, for latest-version detection
