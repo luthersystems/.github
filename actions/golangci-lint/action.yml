@@ -40,13 +40,23 @@ inputs:
 runs:
   using: composite
   steps:
+    # The Go that builds the tool goes in the cache key. golangci-lint,
+    # gosec, govulncheck, apidiff and apibreak type-check the caller's code
+    # with the go/types of the Go they were built with, and that Go must be at
+    # least the caller's. Without it, a binary built by a Go 1.26 run was
+    # restored for a Go 1.27 run and failed with "the Go language version
+    # (go1.26) used to build golangci-lint is lower than the targeted Go
+    # version" (luthersystems/elps#929).
+    - id: go
+      shell: bash
+      run: echo "version=$(go env GOVERSION)" >>"$GITHUB_OUTPUT"
     # Restores the binary this repo built for this version, if any (see
     # lib/go-install.sh for why a cache and why go install). The key is the
     # gosec action's key, so the two jobs share one build.
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/luther-tools/golangci-lint-${{ inputs.version }}
-        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-golangci-lint-${{ inputs.version }}
+        key: luther-tool-${{ runner.os }}-${{ runner.arch }}-golangci-lint-${{ inputs.version }}-${{ steps.go.outputs.version }}
     - name: Install golangci-lint
       shell: bash
       env:
