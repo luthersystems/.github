@@ -6,7 +6,9 @@
 # checksum gives. Why a cache: building golangci-lint or osv-scanner takes
 # minutes, and every job of every PR in every repo would pay that. The action
 # that calls this restores DIR from the Actions cache, keyed on the tool and
-# its version, so a repo builds each version once.
+# its version, so a repo builds each version once. A tool that type-checks the
+# caller's code also has the Go that built it in its key: that Go must be at
+# least the caller's, so a new Go builds the tool again.
 #
 # Usage: go-install.sh DIR MODULE@VERSION BINARY
 set -euo pipefail
