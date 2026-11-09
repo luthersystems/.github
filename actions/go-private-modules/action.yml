@@ -11,7 +11,8 @@ inputs:
     description: >-
       SSH key (or keys, one after another) that can read the private modules.
       A key may follow a line "# git@github.com:owner/repo.git" that names the
-      one repository it reads (tagged-keys.sh); then every key needs one.
+      one repository it reads (tagged-keys.sh); then every key needs one, and
+      no SSH agent is started, so a later step gets no SSH_AUTH_SOCK.
     required: false
     default: ""
   goprivate:
