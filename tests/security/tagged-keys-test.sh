@@ -37,13 +37,13 @@ tag() {
 run() {
   local d="$work/$1"
   mkdir -p "$d"
-  touch "$d/gitconfig"
-  KEY_DIR="$d/keys" GIT_CONFIG_GLOBAL="$d/gitconfig" GITHUB_OUTPUT="$d/out" GITHUB_ENV="$d/env" KEYS="$2" \
+  touch "$d/gitconfig" "$d/system"
+  KEY_DIR="$d/keys" GIT_CONFIG_GLOBAL="$d/gitconfig" GIT_CONFIG_SYSTEM="$d/system" GITHUB_OUTPUT="$d/out" GITHUB_ENV="$d/env" KEYS="$2" \
     bash "$script" >"$d/log" 2>&1
 }
 
 url() {
-  GIT_CONFIG_GLOBAL="$work/$1/gitconfig" git ls-remote --get-url "$2"
+  GIT_CONFIG_GLOBAL="$work/$1/gitconfig" GIT_CONFIG_SYSTEM="$work/$1/system" git ls-remote --get-url "$2"
 }
 
 # expect_fail <case> <reason pattern> <keys>
@@ -77,6 +77,7 @@ if run two "$keys"; then
   [ "$(url two git@github.com:luthersystems/license)" = "git@$lic.github.com:luthersystems/license" ] ||
     fail "two: license's ssh URL"
   grep -q 'secret' "$d/log" && fail "two: the log shows key text"
+  grep -q 'GIT_CONFIG_NOSYSTEM' "$d/env" && fail "two: GIT_CONFIG_NOSYSTEM with no system rule"
   if command -v ssh >/dev/null; then
     # ssh reads the alias from the -F file, whatever HOME is.
     g="$(HOME=/nonexistent ssh -F "$d/keys/config" -G "$sub.github.com")"
@@ -88,6 +89,19 @@ if run two "$keys"; then
   fi
 else
   fail "two: the script failed: $(cat "$work/two/log")"
+fi
+
+# Pass: a system rule for the same URL, as luthersystems/build-go has,
+# would win over the key's rule, so later steps skip the system config.
+mkdir -p "$work/system"
+printf '[url "git@github.com:luthersystems/substrate.git"]\n\tinsteadOf = https://github.com/luthersystems/substrate\n' >"$work/system/system"
+if run system "$keys"; then
+  d="$work/system"
+  grep -qx 'GIT_CONFIG_NOSYSTEM=1' "$d/env" || fail "system: no GIT_CONFIG_NOSYSTEM=1"
+  [ "$(GIT_CONFIG_NOSYSTEM=1 url system https://github.com/luthersystems/substrate)" = "git@$sub.github.com:luthersystems/substrate" ] ||
+    fail "system: substrate's URL without the system config"
+else
+  fail "system: the script failed: $(cat "$work/system/log")"
 fi
 
 # Pass: CRLF line endings, as a secret pasted from Windows has.

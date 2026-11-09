@@ -143,5 +143,23 @@ EOF
   echo "a key reads $repo" >&2
 done
 
+# git applies the longest insteadOf, and of two of the same length, the one
+# it reads first: system config comes before global. luthersystems/build-go
+# has system rules for the exact URL of each private repo (to
+# git@github.com:owner/repo.git), so they win over the rules above, and git
+# connects with no key (libmxf CI, "Permission denied (publickey)"). So when
+# the system config rewrites a URL that a key here rewrites, git does not
+# read the system config in later steps.
+system_rules="$(git config --system --get-regexp '^url\..*\.insteadof$' 2>/dev/null || true)"
+for repo in "${repos[@]}"; do
+  for from in "https://github.com/$repo" "git@github.com:$repo"; do
+    if grep -qxF -- "$from" <<<"$(awk '{print $2}' <<<"$system_rules")"; then
+      echo "::warning::the system git config also rewrites $from; later steps do not read it (GIT_CONFIG_NOSYSTEM=1)"
+      echo "GIT_CONFIG_NOSYSTEM=1" >>"$envf"
+      break 2
+    fi
+  done
+done
+
 echo "GIT_SSH_COMMAND=ssh -F $config" >>"$envf"
 echo "tagged=true" >>"$out"
