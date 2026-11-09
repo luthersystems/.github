@@ -137,7 +137,8 @@ EOF
   fi
   # Both URL forms that go and git use for a GOPRIVATE module.
   for from in "https://github.com/$repo" "git@github.com:$repo"; do
-    git config --global --replace-all "url.git@$host:$repo.insteadOf" "$from" "^$(sed 's/[.[\*^$]/\\&/g' <<<"$from")\$"
+    # The value pattern of --replace-all is a regex: escape the dots.
+    git config --global --replace-all "url.git@$host:$repo.insteadOf" "$from" "^${from//./\\.}\$"
   done
   echo "a key reads $repo" >&2
 done

@@ -19,8 +19,13 @@ fail() {
   fails=$((fails + 1))
 }
 
+# The armour lines are split so that a secret scanner does not read the
+# fake keys as real ones.
+begin='-----BEGIN OPENSSH ''PRIVATE KEY-----'
+end='-----END OPENSSH ''PRIVATE KEY-----'
+
 key() {
-  printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n%s\n-----END OPENSSH PRIVATE KEY-----\n' "$1"
+  printf -- '%s\n%s\n%s\n' "$begin" "$1" "$end"
 }
 
 tag() {
@@ -127,10 +132,10 @@ expect_fail dangling 'no key after it' "$(tag luthersystems/substrate)
 $(key a)
 $(tag luthersystems/license)"
 expect_fail noend 'no END line' "$(tag luthersystems/substrate)
------BEGIN OPENSSH PRIVATE KEY-----
+$begin
 abc"
 expect_fail nested 'starts inside a key' "$(tag luthersystems/substrate)
------BEGIN OPENSSH PRIVATE KEY-----
+$begin
 aaa
 $(key b)"
 expect_fail junk 'outside a key' "hello

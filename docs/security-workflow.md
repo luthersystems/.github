@@ -152,13 +152,9 @@ the one secret, each after a line that names its repository:
 
 ```text
 # git@github.com:luthersystems/substrate.git
------BEGIN OPENSSH PRIVATE KEY-----
-...
------END OPENSSH PRIVATE KEY-----
+<the substrate key, from its BEGIN line to its END line>
 # git@github.com:luthersystems/license.git
------BEGIN OPENSSH PRIVATE KEY-----
-...
------END OPENSSH PRIVATE KEY-----
+<the license key, from its BEGIN line to its END line>
 ```
 
 common-infrastructure's Terraform writes this secret (github-org-admin
