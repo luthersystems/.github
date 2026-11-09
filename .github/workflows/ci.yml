@@ -186,6 +186,8 @@ jobs:
         env:
           RULES: ${{ runner.temp }}/luther-semgrep-rules
         run: bash tests/security/security-test.sh
+      - name: Tagged SSH key cases
+        run: bash tests/security/tagged-keys-test.sh
       - name: Drift issue cases
         run: node tests/security/drift-test.cjs
       - name: Auto-fix prompt and permissions cases

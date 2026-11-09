@@ -146,6 +146,27 @@ jobs:
 The caller's job id must be `security`, so the check is named
 `security / result` in every repo.
 
+A deploy key reads one repository. A repo whose private modules are in two
+repositories (libmxf reads substrate and license) passes one key for each in
+the one secret, each after a line that names its repository:
+
+```text
+# git@github.com:luthersystems/substrate.git
+-----BEGIN OPENSSH PRIVATE KEY-----
+...
+-----END OPENSSH PRIVATE KEY-----
+# git@github.com:luthersystems/license.git
+-----BEGIN OPENSSH PRIVATE KEY-----
+...
+-----END OPENSSH PRIVATE KEY-----
+```
+
+common-infrastructure's Terraform writes this secret (github-org-admin
+`deploy_keys.json`: two entries with the same consumer and secret). The
+`go-private-modules` action gives each key its own SSH host alias and git
+URL rewrite (`actions/go-private-modules/tagged-keys.sh`). One key with no
+tag line works as before.
+
 | Input | Default | When to set it |
 |---|---|---|
 | `go-directories` | every `go.mod` outside `vendor/`, `testdata/`, `node_modules/` | the repo must skip a module, or scan one in such a directory |
