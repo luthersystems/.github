@@ -114,6 +114,55 @@ github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAA
 github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
 EOF
 
+# git applies the longest insteadOf that matches, and of two of the same
+# length, the one it reads first: system config before global, and in one
+# file, the earlier line. So another rule whose value starts with a URL that
+# a key rewrites ties with or beats the key's rule, and git connects with no
+# key ("Permission denied (publickey)"). luthersystems/build-go has system
+# rules for the exact URL of each private repo (to
+# git@github.com:owner/repo.git); that broke libmxf CI. So:
+#  - global: remove each such rule (the rules of this script are kept);
+#  - system: later steps read a copy of the system file without such rules
+#    (GIT_CONFIG_SYSTEM); the rest of the system config is kept.
+shadows() {
+  local value="$1" repo from
+  for repo in "${repos[@]}"; do
+    for from in "https://github.com/$repo" "git@github.com:$repo"; do
+      if [[ "$value" == "$from"* ]]; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+while read -r name value; do
+  [ -n "$name" ] || continue
+  [[ "$name" == url.git@key-* ]] && continue
+  if shadows "$value"; then
+    echo "::warning::removed the global git rule $name = $value: it would win over a key's rule"
+    git config --global --fixed-value --unset-all "$name" "$value"
+  fi
+done <<<"$(git config --global --get-regexp '^url\..*\.insteadof$' 2>/dev/null || true)"
+
+system_copy=""
+while read -r name value; do
+  [ -n "$name" ] || continue
+  if shadows "$value"; then
+    if [ -z "$system_copy" ]; then
+      system_file="$(git config --system --show-origin --list | head -n 1 | cut -f 1)"
+      system_file="${system_file#file:}"
+      system_copy="$key_dir/system-gitconfig"
+      cp "$system_file" "$system_copy"
+    fi
+    echo "::warning::later steps do not read the system git rule $name = $value: it would win over a key's rule"
+    git config --file "$system_copy" --fixed-value --unset-all "$name" "$value"
+  fi
+done <<<"$(git config --system --get-regexp '^url\..*\.insteadof$' 2>/dev/null || true)"
+if [ -n "$system_copy" ]; then
+  echo "GIT_CONFIG_SYSTEM=$system_copy" >>"$envf"
+fi
+
 for i in "${!repos[@]}"; do
   repo="${repos[$i]}"
   # One name per repository, so a second run for the same repository

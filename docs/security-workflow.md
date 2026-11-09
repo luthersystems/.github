@@ -161,7 +161,13 @@ common-infrastructure's Terraform writes this secret (github-org-admin
 `deploy_keys.json`: two entries with the same consumer and secret). The
 `go-private-modules` action gives each key its own SSH host alias and git
 URL rewrite (`actions/go-private-modules/tagged-keys.sh`). One key with no
-tag line works as before.
+tag line works as before. Another git rule that rewrites a key's URL, or
+a longer URL that starts with it, wins over the key's rule (the
+`luthersystems/build-go` image has such system rules, one for each private
+repo). So the action removes such a rule from the global config, and the
+later steps of the job read a copy of the system config without such a rule
+(`GIT_CONFIG_SYSTEM`). The rest of the system config stays. Each removed
+rule gets a warning.
 
 | Input | Default | When to set it |
 |---|---|---|

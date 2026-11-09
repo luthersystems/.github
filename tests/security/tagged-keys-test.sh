@@ -37,13 +37,13 @@ tag() {
 run() {
   local d="$work/$1"
   mkdir -p "$d"
-  touch "$d/gitconfig"
-  KEY_DIR="$d/keys" GIT_CONFIG_GLOBAL="$d/gitconfig" GITHUB_OUTPUT="$d/out" GITHUB_ENV="$d/env" KEYS="$2" \
+  touch "$d/gitconfig" "$d/system"
+  KEY_DIR="$d/keys" GIT_CONFIG_GLOBAL="$d/gitconfig" GIT_CONFIG_SYSTEM="$d/system" GITHUB_OUTPUT="$d/out" GITHUB_ENV="$d/env" KEYS="$2" \
     bash "$script" >"$d/log" 2>&1
 }
 
 url() {
-  GIT_CONFIG_GLOBAL="$work/$1/gitconfig" git ls-remote --get-url "$2"
+  GIT_CONFIG_GLOBAL="$work/$1/gitconfig" GIT_CONFIG_SYSTEM="$work/$1/system" git ls-remote --get-url "$2"
 }
 
 # expect_fail <case> <reason pattern> <keys>
@@ -77,6 +77,7 @@ if run two "$keys"; then
   [ "$(url two git@github.com:luthersystems/license)" = "git@$lic.github.com:luthersystems/license" ] ||
     fail "two: license's ssh URL"
   grep -q 'secret' "$d/log" && fail "two: the log shows key text"
+  grep -q 'GIT_CONFIG_SYSTEM' "$d/env" && fail "two: GIT_CONFIG_SYSTEM with no system rule"
   if command -v ssh >/dev/null; then
     # ssh reads the alias from the -F file, whatever HOME is.
     g="$(HOME=/nonexistent ssh -F "$d/keys/config" -G "$sub.github.com")"
@@ -88,6 +89,55 @@ if run two "$keys"; then
   fi
 else
   fail "two: the script failed: $(cat "$work/two/log")"
+fi
+
+# Pass: system rules that tie with or beat a key's rule, as
+# luthersystems/build-go has, are left out of the copy later steps read;
+# the rest of the system config stays.
+mkdir -p "$work/system"
+cat >"$work/system/system" <<'EOF'
+[url "git@github.com:luthersystems/substrate.git"]
+	insteadOf = https://github.com/luthersystems/substrate
+	insteadOf = https://github.com/luthersystems/substrate.git
+[url "git@github.com:luthersystems/chainidentifier.git"]
+	insteadOf = https://github.com/luthersystems/chainidentifier
+[url "ssh://git@github.com/luthersystems/license"]
+	insteadOf = git@github.com:luthersystems/license
+[http]
+	sslVerify = true
+EOF
+[ "$(url system https://github.com/luthersystems/substrate)" = "git@github.com:luthersystems/substrate.git" ] ||
+  fail "system: the premise: the system rule does not win before the script"
+if run system "$keys"; then
+  d="$work/system"
+  grep -qx "GIT_CONFIG_SYSTEM=$d/keys/system-gitconfig" "$d/env" || fail "system: no GIT_CONFIG_SYSTEM"
+  sysurl() { GIT_CONFIG_GLOBAL="$d/gitconfig" GIT_CONFIG_SYSTEM="$d/keys/system-gitconfig" git ls-remote --get-url "$1"; }
+  [ "$(sysurl https://github.com/luthersystems/substrate)" = "git@$sub.github.com:luthersystems/substrate" ] ||
+    fail "system: substrate's URL"
+  [ "$(sysurl https://github.com/luthersystems/substrate.git)" = "git@$sub.github.com:luthersystems/substrate.git" ] ||
+    fail "system: substrate's .git URL"
+  [ "$(sysurl git@github.com:luthersystems/license)" = "git@$lic.github.com:luthersystems/license" ] ||
+    fail "system: license's ssh URL"
+  [ "$(sysurl https://github.com/luthersystems/chainidentifier)" = "git@github.com:luthersystems/chainidentifier.git" ] ||
+    fail "system: a rule for another repo was removed"
+  [ "$(git config --file "$d/keys/system-gitconfig" http.sslVerify)" = true ] || fail "system: other config was removed"
+  grep -q 'substrate.git' "$d/system" || fail "system: the system file itself was changed"
+else
+  fail "system: the script failed: $(cat "$work/system/log")"
+fi
+
+# Pass: a global rule written before the script, which git reads before the
+# script's rules, is removed.
+mkdir -p "$work/global"
+printf '[url "git@github.com:luthersystems/substrate.git"]\n\tinsteadOf = https://github.com/luthersystems/substrate\n[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n' >"$work/global/gitconfig"
+if run global "$keys"; then
+  [ "$(url global https://github.com/luthersystems/substrate)" = "git@$sub.github.com:luthersystems/substrate" ] ||
+    fail "global: substrate's URL"
+  [ "$(url global https://github.com/luthersystems/other)" = "git@github.com:luthersystems/other" ] ||
+    fail "global: the general rule was removed"
+  grep -q 'GIT_CONFIG_SYSTEM' "$work/global/env" && fail "global: GIT_CONFIG_SYSTEM with no system rule"
+else
+  fail "global: the script failed: $(cat "$work/global/log")"
 fi
 
 # Pass: CRLF line endings, as a secret pasted from Windows has.
