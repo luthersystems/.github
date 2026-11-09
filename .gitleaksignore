@@ -1,0 +1,4 @@
+# Fake keys in earlier commits of luthersystems/.github#22 (the tagged-keys
+# tests and docs). Later commits split the armour lines, so no new ones.
+f4e2a55b0e2a36184716b2dffe375d9325ac2c05:docs/security-workflow.md:private-key:155
+792482ea0bf6505855aadc513004eb7dfb6a195b:tests/security/tagged-keys-test.sh:private-key:130
