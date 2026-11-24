@@ -1,0 +1,55 @@
+name: Release notes
+description: >-
+  Write the release notes for a release of HEAD: one line per change on the
+  first-parent history of main since the previous release tag, then the
+  output of an optional repo command, then the compare link.
+
+# Why it exists: by 2026-11 mars and elps each kept an almost identical bash
+# copy of this list (scripts/release-notes.sh), and insideout-terraform-presets
+# a third one in Go (cmd/releasenotes). The copies drifted: two stopped at 200
+# changes, one left squash merges with a second PR number. One copy here, used
+# by release-tag.yml (input notes: changes), fixes that once.
+#
+# Why the repo command: some sections only a repo can write, because they read
+# its own files (elps's API break list, the presets' Terraform module
+# changes). The action prints the shared list first, then that command's
+# stdout, so a repo adds sections without copying the list again.
+#
+# Why not GitHub's generated notes: they list only merged pull requests, so a
+# commit pushed to main without a PR is left out, and they cannot hold a repo
+# section.
+#
+# Needs: a checkout with full history and tags (fetch-depth: 0) in the
+# working directory, and bash and git on the runner.
+
+inputs:
+  last-tag:
+    description: The previous release tag. Empty for a first release, which lists all of HEAD's history.
+    required: false
+    default: ""
+  tag:
+    description: The tag being released, for the compare link. Empty = no link.
+    required: false
+    default: ""
+  extra-command:
+    description: >-
+      Optional shell command, run in the checkout with LAST_TAG and TAG set,
+      whose stdout goes after the list. A failure fails the action, so a
+      release never ships with a section silently missing.
+    required: false
+    default: ""
+  output:
+    description: File to write the notes to.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write the release notes
+      shell: bash
+      env:
+        LAST_TAG: ${{ inputs.last-tag }}
+        TAG: ${{ inputs.tag }}
+        EXTRA_COMMAND: ${{ inputs.extra-command }}
+        NOTES_OUTPUT: ${{ inputs.output }}
+      run: bash "$GITHUB_ACTION_PATH/release-notes.sh" > "$NOTES_OUTPUT"

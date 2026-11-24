@@ -37,6 +37,14 @@ name: Release (tag)
 # has no start tag, so its generated notes reach back to the repo's latest
 # release; set notes_command for it if that matters.
 #
+# Notes (input notes): github, the default, keeps GitHub's generated notes
+# (or notes_command's stdout). changes writes the shared list from
+# actions/release-notes: every change on main's first-parent history since
+# the last release, PRs and direct pushes alike, with no cap, then
+# notes_extra_command's stdout for a repo's own sections. It replaced the
+# copies of that list in mars, elps and insideout-terraform-presets, which
+# had drifted (two stopped at 200 changes).
+#
 # Token (input release_token):
 # - github (default): the caller's GITHUB_TOKEN creates the tag and the
 #   release. GitHub starts no workflow for an event made with that token, so
@@ -104,6 +112,24 @@ on:
         type: string
         required: false
         default: ""
+      notes:
+        description: >-
+          Where the release notes come from. github (default): GitHub's
+          generated notes, or notes_command's stdout when it is set. changes:
+          the shared list of every change on main since the last release
+          (actions/release-notes), then notes_extra_command's stdout.
+        type: string
+        required: false
+        default: github
+      notes_extra_command:
+        description: >-
+          With notes: changes, an optional shell command, run in the caller's
+          checkout with LAST_TAG and TAG set, whose stdout goes after the
+          shared list (a repo's own sections, such as API breaks). A failure
+          fails the release.
+        type: string
+        required: false
+        default: ""
       tag_prefix:
         description: >-
           Prefix of the tag and the release, for a Go module in a
@@ -147,10 +173,22 @@ jobs:
       - name: Check the release mode
         env:
           RELEASE_TOKEN: ${{ inputs.release_token }}
+          NOTES: ${{ inputs.notes }}
+          NOTES_COMMAND: ${{ inputs.notes_command }}
+          NOTES_EXTRA_COMMAND: ${{ inputs.notes_extra_command }}
         run: |
           case "$RELEASE_TOKEN" in
             github|claude-app) ;;
             *) echo "error: release_token must be github or claude-app, not '$RELEASE_TOKEN'" >&2; exit 1 ;;
+          esac
+          # Refuse a mix that would drop one of the commands without a word,
+          # here, before the CI wait.
+          case "$NOTES" in
+            github)
+              [ -z "$NOTES_EXTRA_COMMAND" ] || { echo "error: notes_extra_command needs notes: changes" >&2; exit 1; } ;;
+            changes)
+              [ -z "$NOTES_COMMAND" ] || { echo "error: notes_command replaces the notes; with notes: changes use notes_extra_command" >&2; exit 1; } ;;
+            *) echo "error: notes must be github or changes, not '$NOTES'" >&2; exit 1 ;;
           esac
           # The prefix reaches API paths, git and the release command, so
           # allow only directories of plain characters ending in /, and only
@@ -327,12 +365,24 @@ jobs:
             echo "tag=$tag"
             echo "latest=$latest"
           } >> "$GITHUB_OUTPUT"
+      # At @v1, not ./: in a called workflow ./ is the caller's checkout.
+      # The action moves with release-tag.yml, since release.yml moves v1
+      # for both.
+      - name: Write the shared release notes
+        if: ${{ inputs.notes == 'changes' }}
+        uses: luthersystems/.github/actions/release-notes@v1
+        with:
+          last-tag: ${{ steps.ver.outputs.latest }}
+          tag: ${{ steps.ver.outputs.tag }}
+          extra-command: ${{ inputs.notes_extra_command }}
+          output: ${{ runner.temp }}/release-notes.md
       - name: Build the release command
         id: cmd
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           LAST_TAG: ${{ steps.ver.outputs.latest }}
           NOTES_COMMAND: ${{ inputs.notes_command }}
+          NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
           notes_args="--generate-notes"
@@ -352,6 +402,10 @@ jobs:
             # The caller's own command in the caller's own checkout: it is
             # repo configuration, not dispatch input.
             LAST_TAG="$LAST_TAG" bash -c "$NOTES_COMMAND" > "$notes_path"
+            notes_args="${notes_args%%--generate-notes*}--notes-file $notes_path"
+          elif [ "$NOTES" = changes ]; then
+            notes_path="$RUNNER_TEMP/release-notes.md"
+            [ -s "$notes_path" ] || { echo "error: the shared release notes are empty" >&2; exit 1; }
             notes_args="${notes_args%%--generate-notes*}--notes-file $notes_path"
           fi
           # Every value here is a validated version or tag, a 40-hex SHA,
