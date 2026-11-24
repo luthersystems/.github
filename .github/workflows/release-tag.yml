@@ -374,8 +374,9 @@ jobs:
       # (run 45512857475). A checkout step is resolved only when it runs.
       # The script moves with release-tag.yml, since release.yml moves v1
       # for both; a caller that pins this workflow to a SHA still gets v1's
-      # script, so keep its env backward compatible. Change this to v2 with
-      # the next major.
+      # script, and v1 is read when this step runs, so a job that started
+      # before a .github release can run the newer script. Keep the script's
+      # env backward compatible. Change this to v2 with the next major.
       - name: Check out the shared release notes script
         if: ${{ inputs.notes == 'changes' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
