@@ -126,6 +126,19 @@ jobs:
       - name: "Fail: the failing cases fail, for the right reason"
         run: bash tests/harden-check/expect-fail.sh
 
+  # The shared release notes (actions/release-notes), on a test repository
+  # with each kind of commit that reaches main. release-tag.yml calls the
+  # action at @v1, so the workflow side is tested through its callers.
+  release-notes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Release notes cases
+        run: bash tests/release-notes/release-notes-test.sh
+
   # The security workflow's actions, run as a caller runs them (uses:
   # ./actions/...) on inputs that must pass, which also installs each pinned
   # tool. Then the test script runs every check on inputs that must fail, and
