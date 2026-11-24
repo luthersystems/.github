@@ -366,19 +366,39 @@ jobs:
             echo "tag=$tag"
             echo "latest=$latest"
           } >> "$GITHUB_OUTPUT"
-      # At @v1, not ./: in a called workflow ./ is the caller's checkout.
-      # The action moves with release-tag.yml, since release.yml moves v1
+      # The script of actions/release-notes, checked out from this repo at
+      # v1, not ./: in a called workflow ./ is the caller's checkout. Not
+      # `uses: .../actions/release-notes@v1`: GitHub downloads every action
+      # of a job before the first step, skipped steps too, so a release that
+      # adds the action could not run release.yml, the one way v1 moves
+      # (run 45512857475). A checkout step is resolved only when it runs.
+      # The script moves with release-tag.yml, since release.yml moves v1
       # for both; a caller that pins this workflow to a SHA still gets v1's
-      # action, so keep its inputs backward compatible. Change this to @v2
-      # with the next major.
+      # script, so keep its env backward compatible. Change this to v2 with
+      # the next major.
+      - name: Check out the shared release notes script
+        if: ${{ inputs.notes == 'changes' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: luthersystems/.github
+          ref: v1
+          path: .luthersystems-release-notes
+          persist-credentials: false
       - name: Write the shared release notes
         if: ${{ inputs.notes == 'changes' }}
-        uses: luthersystems/.github/actions/release-notes@v1
-        with:
-          last-tag: ${{ steps.ver.outputs.latest }}
-          tag: ${{ steps.ver.outputs.tag }}
-          extra-command: ${{ inputs.notes_extra_command }}
-          output: ${{ runner.temp }}/release-notes.md
+        env:
+          LAST_TAG: ${{ steps.ver.outputs.latest }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          EXTRA_COMMAND: ${{ inputs.notes_extra_command }}
+        run: |
+          set -euo pipefail
+          script=.luthersystems-release-notes/actions/release-notes/release-notes.sh
+          [ -f "$script" ] || { echo "error: $script is missing at luthersystems/.github v1" >&2; exit 1; }
+          # Copy it out and remove the checkout, so the caller's extra
+          # command sees only its own files.
+          cp "$script" "$RUNNER_TEMP/release-notes.sh"
+          rm -rf .luthersystems-release-notes
+          bash "$RUNNER_TEMP/release-notes.sh" > "$RUNNER_TEMP/release-notes.md"
       - name: Build the release command
         id: cmd
         env:
