@@ -35,7 +35,8 @@ name: Release (tag)
 # with that prefix. A prefixed release is never marked the repo's latest
 # release, which stays the main module's. The first release under a prefix
 # has no start tag, so its generated notes reach back to the repo's latest
-# release; set notes_command for it if that matters.
+# release (with notes: changes, to the first commit, cut at GitHub's size
+# limit); set notes_command for it if that matters.
 #
 # Notes (input notes): github, the default, keeps GitHub's generated notes
 # (or notes_command's stdout). changes writes the shared list from
@@ -367,7 +368,9 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       # At @v1, not ./: in a called workflow ./ is the caller's checkout.
       # The action moves with release-tag.yml, since release.yml moves v1
-      # for both.
+      # for both; a caller that pins this workflow to a SHA still gets v1's
+      # action, so keep its inputs backward compatible. Change this to @v2
+      # with the next major.
       - name: Write the shared release notes
         if: ${{ inputs.notes == 'changes' }}
         uses: luthersystems/.github/actions/release-notes@v1

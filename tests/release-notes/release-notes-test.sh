@@ -124,6 +124,15 @@ LAST_TAG=v1.1.0 bash "$NOTES" >"$out"
 n=$(grep -c '^- Change ' "$out")
 [[ "$n" == 205 ]] && pass "no cap at 200" || fail "no cap at 200: got $n"
 
+# Past the size limit the list ends with a count of the rest and a link.
+LAST_TAG=v1.1.0 TAG=v1.2.0 GITHUB_REPOSITORY=luthersystems/example LIST_LIMIT=200 bash "$NOTES" >"$out"
+n=$(grep -c '^- Change ' "$out")
+(( n > 0 && n < 205 )) && pass "size limit cuts the list" || fail "size limit cuts the list: got $n"
+want "size limit counts the rest" "$out" "- ...and $(( 205 - n )) more changes: https://github.com/luthersystems/example/compare/v1.1.0...v1.2.0"
+TAG=v1.2.0 GITHUB_REPOSITORY=luthersystems/example LIST_LIMIT=200 bash "$NOTES" >"$out"
+grep -q '^- \.\.\.and [0-9]* more changes: https://github.com/luthersystems/example/commits/v1.2.0$' "$out" \
+  && pass "size limit on a first release links the commits" || fail "size limit on a first release links the commits"
+
 if (( fails > 0 )); then
   echo "$fails case(s) failed" >&2
   exit 1

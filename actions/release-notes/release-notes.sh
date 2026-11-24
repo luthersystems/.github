@@ -5,6 +5,7 @@
 #   LAST_TAG       previous release tag; empty lists all of HEAD's history
 #   TAG            tag being released, for the compare link; empty = no link
 #   EXTRA_COMMAND  optional shell command whose stdout follows the list
+#   LIST_LIMIT     characters of list before it is cut (default 100000)
 #   GITHUB_REPOSITORY  owner/repo, for the compare link (set by Actions)
 #
 # One line per commit on the first-parent history, the way it reached main:
@@ -13,7 +14,13 @@
 # - a squash merge already ends in "(#N)", so its subject is used as it is;
 # - any other commit (pushed without a PR): its subject and short SHA, so it
 #   is still listed, which GitHub's generated notes do not do.
-# There is no cap on the number of lines: a long release lists every change.
+#   A direct push whose subject happens to end in "(#N)" reads the same as a
+#   squash merge; telling them apart needs the GitHub API, which this script
+#   does not call, so it is left as a known gap.
+# There is no cap on the number of lines, only on size: GitHub refuses a
+# release body over 125000 characters, which a first release of a long
+# history can pass. Past LIST_LIMIT characters the list ends with a line that
+# counts the rest and links to them.
 set -euo pipefail
 
 last_tag="${LAST_TAG:-}"
@@ -48,12 +55,32 @@ while IFS=$'\x1f' read -r sha parents subject; do
   fi
 done <<<"$log"
 
+# Room under GitHub's 125000 for the extra sections and the link.
+limit="${LIST_LIMIT:-100000}"
 echo "## What's Changed"
 echo
 if (( ${#lines[@]} == 0 )); then
   echo "- No changes since $last_tag."
 else
-  printf '%s\n' "${lines[@]}"
+  used=0
+  for i in "${!lines[@]}"; do
+    line=${lines[$i]}
+    if (( used + ${#line} + 1 > limit )); then
+      rest=$(( ${#lines[@]} - i ))
+      more="- ...and $rest more changes"
+      if [[ -n "$tag" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+        if [[ -n "$last_tag" ]]; then
+          more+=": https://github.com/$GITHUB_REPOSITORY/compare/$last_tag...$tag"
+        else
+          more+=": https://github.com/$GITHUB_REPOSITORY/commits/$tag"
+        fi
+      fi
+      echo "$more"
+      break
+    fi
+    printf '%s\n' "$line"
+    used=$(( used + ${#line} + 1 ))
+  done
 fi
 
 if [[ -n "${EXTRA_COMMAND:-}" ]]; then
