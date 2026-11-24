@@ -27,6 +27,8 @@ nowant() { grep -qF -- "$3" "$2" && { fail "$1: unexpected: $3"; sed 's/^/  | /'
 
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# Actions sets GITHUB_REPOSITORY; each case sets it only when it wants the link.
+unset GITHUB_REPOSITORY
 R="$TMP/repo"
 git init -q -b main "$R"
 cd "$R" || exit 1
