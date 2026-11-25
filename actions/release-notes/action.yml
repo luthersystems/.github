@@ -8,7 +8,8 @@ description: >-
 # copy of this list (scripts/release-notes.sh), and insideout-terraform-presets
 # a third one in Go (cmd/releasenotes). The copies drifted: two stopped at 200
 # changes, one left squash merges with a second PR number. One copy here, used
-# by release-tag.yml (input notes: changes), fixes that once.
+# by release-tag.yml (input notes: changes, which runs this script from a
+# checkout of v1 rather than the action, see there), fixes that once.
 #
 # Why the repo command: some sections only a repo can write, because they read
 # its own files (elps's API break list, the presets' Terraform module

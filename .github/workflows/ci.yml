@@ -45,6 +45,22 @@ jobs:
               exit 1
             fi
           done
+      # release.yml runs release-tag.yml at the dispatched commit, and GitHub
+      # downloads every action of a job before its first step, skipped ones
+      # too. So a `uses:` of this repo's own action at @v1 in release-tag.yml
+      # fails every release until v1 has that action, and only a release
+      # moves v1 (run 45512857475, after #24). Run this repo's scripts from
+      # a checkout step instead.
+      - name: Check the release path uses no action of this repo
+        run: |
+          set -euo pipefail
+          for f in release-tag release; do
+            # Quoted or not, any case: GitHub accepts all of them.
+            if grep -niE "^[[:space:]-]*uses:[[:space:]]*[\"']?luthersystems/\\.github/" ".github/workflows/$f.yml"; then
+              echo "::error file=.github/workflows/$f.yml::uses an action of luthersystems/.github; release.yml could not run until v1 had it"
+              exit 1
+            fi
+          done
       # security.yml and quality.yml repeat one runs-on expression on every
       # job (GitHub has no shared runs-on). A job whose copy drifts runs
       # somewhere its siblings do not, which shows only as a queued job.
@@ -127,8 +143,9 @@ jobs:
         run: bash tests/harden-check/expect-fail.sh
 
   # The shared release notes (actions/release-notes), on a test repository
-  # with each kind of commit that reaches main. release-tag.yml calls the
-  # action at @v1, so the workflow side is tested through its callers.
+  # with each kind of commit that reaches main. release-tag.yml runs the
+  # script from a checkout of v1, so the workflow side is tested through its
+  # callers.
   release-notes:
     runs-on: ubuntu-latest
     timeout-minutes: 10
